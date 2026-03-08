@@ -18,6 +18,28 @@ import { SimulationParameters } from "./sim/types";
 
 type CameraMode = "follow" | "overview" | "dock" | "manual";
 type OverlayScreen = "setup" | "telemetry" | "report" | "notes" | "buildPrompt" | null;
+type ParentViewportMessage =
+  | {
+      source: "photonic-laser-drone-sim";
+      type: "make-big" | "shrink";
+    }
+  | {
+      source: "photonic-parent-page";
+      type: "make-big" | "shrink";
+    };
+
+function notifyParentViewportMode(type: "make-big" | "shrink"): void {
+  if (typeof window === "undefined" || window.parent === window) {
+    return;
+  }
+
+  const message: ParentViewportMessage = {
+    source: "photonic-laser-drone-sim",
+    type
+  };
+
+  window.parent.postMessage(message, "*");
+}
 
 function readRuntimeConfig(): {
   startRunning: boolean;
@@ -114,6 +136,13 @@ export default function App(): JSX.Element {
     [activeParams, draftParams]
   );
 
+  const setViewportExpanded = (nextValue: boolean, syncParent = false): void => {
+    setIsExpanded(nextValue);
+    if (syncParent) {
+      notifyParentViewportMode(nextValue ? "make-big" : "shrink");
+    }
+  };
+
   const applyDraft = (): void => {
     setActiveParams(draftParams);
     setScenarioVersion((value) => value + 1);
@@ -143,7 +172,7 @@ export default function App(): JSX.Element {
   };
 
   const openOverlay = (screen: Exclude<OverlayScreen, null>): void => {
-    setIsExpanded(true);
+    setViewportExpanded(true);
     setControlsHidden(false);
     setActiveOverlay(screen);
   };
@@ -188,7 +217,7 @@ export default function App(): JSX.Element {
 
     const handleKeyDown = (event: KeyboardEvent): void => {
       if (event.key === "Escape") {
-        setIsExpanded(false);
+        setViewportExpanded(false, true);
         return;
       }
 
@@ -213,6 +242,30 @@ export default function App(): JSX.Element {
       setActiveOverlay(null);
     }
   }, [isExpanded]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const handleParentMessage = (event: MessageEvent<ParentViewportMessage>): void => {
+      const message = event.data;
+      if (!message || message.source !== "photonic-parent-page") {
+        return;
+      }
+
+      if (message.type === "make-big") {
+        setViewportExpanded(true);
+      }
+
+      if (message.type === "shrink") {
+        setViewportExpanded(false);
+      }
+    };
+
+    window.addEventListener("message", handleParentMessage);
+    return () => window.removeEventListener("message", handleParentMessage);
+  }, []);
 
   useEffect(() => {
     if (buildToastTriggeredRef.current || typeof window === "undefined" || !isRunning) {
@@ -389,7 +442,7 @@ export default function App(): JSX.Element {
                     <button className="secondary-button" onClick={() => setIsRunning(!isRunning)}>
                       {isRunning ? "Pause" : "Resume"}
                     </button>
-                    <button className="secondary-button" onClick={() => setIsExpanded(false)}>
+                    <button className="secondary-button" onClick={() => setViewportExpanded(false, true)}>
                       Shrink
                     </button>
                   </div>
@@ -397,7 +450,7 @@ export default function App(): JSX.Element {
               )
             ) : (
                 <div className="scene-action-row">
-                  <button className="secondary-button" onClick={() => setIsExpanded(true)}>
+                  <button className="secondary-button" onClick={() => setViewportExpanded(true, true)}>
                     Get big
                   </button>
                 </div>

@@ -253,6 +253,11 @@ code {
   backdrop-filter: blur(12px);
 }
 
+.tutorial-callout-mobile {
+  width: auto;
+  max-width: none;
+}
+
 .tutorial-callout strong {
   display: block;
   margin-bottom: 6px;
@@ -1042,6 +1047,11 @@ code {
     flex-direction: column;
   }
 
+  .scene-toolbar-copy,
+  .camera-switcher {
+    width: 100%;
+  }
+
   .scene-shell {
     --scene-height: 560px;
   }
@@ -1117,11 +1127,20 @@ code {
 
   .scene-hud-compact {
     bottom: auto;
-    max-width: calc(100% - 116px);
+    max-width: calc(100% - 88px);
   }
 
   .scene-hud-grid {
     grid-template-columns: 1fr;
+  }
+
+  .scene-hud-status {
+    gap: 6px;
+  }
+
+  .scene-hud-status .small-pill {
+    padding: 7px 10px;
+    font-size: 0.76rem;
   }
 
   .scene-attitude-shell {
@@ -1141,6 +1160,12 @@ code {
   .scene-action-row {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .scene-action-row .secondary-button,
+  .scene-action-row .camera-button {
+    width: 100%;
+    justify-content: center;
   }
 
   .scene-toast-stack {
@@ -1170,5 +1195,23 @@ code {
   .scene-stage-expanded::before {
     inset: 0;
     border-radius: 0;
+  }
+
+  .scene-overlay-backdrop {
+    padding: 0;
+    align-items: stretch;
+    justify-content: stretch;
+    border-radius: 0;
+  }
+
+  .scene-overlay-frame {
+    width: 100%;
+    max-height: none;
+    padding-top: 0;
+  }
+
+  .overlay-close {
+    top: 12px;
+    margin: 12px 12px -42px auto;
   }
 }

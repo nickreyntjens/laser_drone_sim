@@ -7,6 +7,7 @@ import { SceneHud } from "./components/SceneHud";
 import { SimulationScene } from "./components/SimulationScene";
 import { SummaryPanel } from "./components/SummaryPanel";
 import { useMissionController } from "./hooks/useMissionController";
+import { useResponsiveUi } from "./hooks/useResponsiveUi";
 import { formatDuration } from "./lib/format";
 import {
   DEFAULT_SEED,
@@ -91,7 +92,6 @@ function parametersDiffer(a: SimulationParameters, b: SimulationParameters): boo
   return false;
 }
 
-const TUTORIAL_STORAGE_KEY = "photonic-laser-drone-sim.tutorialComplete";
 const TUTORIAL_STEPS: TutorialStep[] = [
   {
     id: "setup",
@@ -138,12 +138,13 @@ export default function App(): JSX.Element {
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(PLAYBACK_SPEED);
   const [showBuildToast, setShowBuildToast] = useState(false);
   const [showMissionCompleteToast, setShowMissionCompleteToast] = useState(false);
-  const [tutorialComplete, setTutorialComplete] = useState(false);
+  const [hasAutoShownTutorial, setHasAutoShownTutorial] = useState(false);
   const [tutorialStepIndex, setTutorialStepIndex] = useState<number | null>(null);
   const [tutorialRect, setTutorialRect] = useState<DOMRect | null>(null);
   const watchSecondsRef = useRef(0);
   const buildToastTriggeredRef = useRef(false);
   const previousSummaryRef = useRef(false);
+  const { isMobileUi } = useResponsiveUi();
 
   const {
     engineRef,
@@ -179,10 +180,6 @@ export default function App(): JSX.Element {
   const finishTutorial = (): void => {
     setTutorialStepIndex(null);
     setTutorialRect(null);
-    setTutorialComplete(true);
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem(TUTORIAL_STORAGE_KEY, "1");
-    }
   };
 
   const startTutorial = (): void => {
@@ -259,14 +256,6 @@ export default function App(): JSX.Element {
   }, [isExpanded]);
 
   useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    setTutorialComplete(window.localStorage.getItem(TUTORIAL_STORAGE_KEY) === "1");
-  }, []);
-
-  useEffect(() => {
     if (!isExpanded || typeof window === "undefined") {
       return;
     }
@@ -302,10 +291,11 @@ export default function App(): JSX.Element {
   }, [isExpanded]);
 
   useEffect(() => {
-    if (isExpanded && !tutorialComplete && tutorialStepIndex === null && !controlsHidden) {
+    if (isExpanded && !hasAutoShownTutorial && tutorialStepIndex === null && !controlsHidden) {
+      setHasAutoShownTutorial(true);
       startTutorial();
     }
-  }, [controlsHidden, isExpanded, tutorialComplete, tutorialStepIndex]);
+  }, [controlsHidden, hasAutoShownTutorial, isExpanded, tutorialStepIndex]);
 
   useEffect(() => {
     if (!tutorialVisible || !tutorialStep || typeof window === "undefined") {
@@ -409,6 +399,7 @@ export default function App(): JSX.Element {
             isIntroActive={isIntroActive}
             isExpanded={isExpanded}
             controlsHidden={controlsHidden}
+            isMobileUi={isMobileUi}
             playbackSpeed={playbackSpeed}
             playbackSpeedOptions={[...PLAYBACK_SPEED_OPTIONS]}
             onPlaybackSpeedChange={setPlaybackSpeed}
@@ -420,6 +411,7 @@ export default function App(): JSX.Element {
             isIntroActive={isIntroActive}
             isExpanded={isExpanded}
             controlsHidden={controlsHidden}
+            isMobileUi={isMobileUi}
           />
 
           {!controlsHidden ? (
@@ -522,19 +514,19 @@ export default function App(): JSX.Element {
                       data-tutorial-id="telemetry-button"
                       onClick={() => toggleOverlay("telemetry")}
                     >
-                      Telemetry
+                      {isMobileUi ? "Stats" : "Telemetry"}
                     </button>
                     <button
                       className={activeOverlay === "report" ? "camera-button active" : "camera-button"}
                       onClick={() => toggleOverlay("report")}
                     >
-                      Mission report
+                      {isMobileUi ? "Report" : "Mission report"}
                     </button>
                     <button
                       className={activeOverlay === "notes" ? "camera-button active" : "camera-button"}
                       onClick={() => toggleOverlay("notes")}
                     >
-                      Model notes
+                      {isMobileUi ? "Notes" : "Model notes"}
                     </button>
                   </div>
                   <div className="scene-action-row">
@@ -564,16 +556,24 @@ export default function App(): JSX.Element {
 
           {tutorialVisible && tutorialRect ? (
             <div
-              className="tutorial-callout"
+              className={isMobileUi ? "tutorial-callout tutorial-callout-mobile" : "tutorial-callout"}
               style={{
-                top:
-                  tutorialRect.top > 180
-                    ? Math.max(18, tutorialRect.top - 150)
-                    : Math.min(tutorialRect.bottom + 14, window.innerHeight - 164),
-                left: Math.min(
-                  Math.max(tutorialRect.left, 18),
-                  Math.max(18, window.innerWidth - 330)
-                )
+                ...(isMobileUi
+                  ? {
+                      left: 12,
+                      right: 12,
+                      bottom: 14
+                    }
+                  : {
+                      top:
+                        tutorialRect.top > 180
+                          ? Math.max(18, tutorialRect.top - 150)
+                          : Math.min(tutorialRect.bottom + 14, window.innerHeight - 164),
+                      left: Math.min(
+                        Math.max(tutorialRect.left, 18),
+                        Math.max(18, window.innerWidth - 330)
+                      )
+                    })
               }}
             >
               <span className="eyebrow">Quick tour</span>

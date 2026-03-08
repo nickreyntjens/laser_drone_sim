@@ -19,6 +19,7 @@ interface SimulationSceneProps {
   isIntroActive: boolean;
   isExpanded: boolean;
   controlsHidden: boolean;
+  isMobileUi: boolean;
   playbackSpeed: number;
   playbackSpeedOptions: number[];
   onPlaybackSpeedChange: (value: number) => void;
@@ -898,6 +899,7 @@ export function SimulationScene({
   isIntroActive,
   isExpanded,
   controlsHidden,
+  isMobileUi,
   playbackSpeed,
   playbackSpeedOptions,
   onPlaybackSpeedChange,
@@ -918,7 +920,7 @@ export function SimulationScene({
           <div className="scene-toolbar-copy">
             <label className="scene-select" data-tutorial-id="playback-control">
               <span className="inline-label">
-                Playback
+                {isMobileUi ? "Speed" : "Playback"}
                 <span
                   className="info-hint"
                   title="Speeds up playback without using a coarser mission timestep, so the simulation stays smooth and physically consistent."
@@ -951,7 +953,14 @@ export function SimulationScene({
                 className={cameraMode === mode ? "camera-button active" : "camera-button"}
                 onClick={() => onCameraModeChange(mode)}
               >
-                {mode}
+                {isMobileUi
+                  ? {
+                      follow: "Follow",
+                      overview: "Field",
+                      dock: "Dock",
+                      manual: "Free"
+                    }[mode]
+                  : mode}
               </button>
             ))}
           </div>

@@ -51,9 +51,7 @@ export function SceneHud({
   );
   const compactStatusItems = isMobileUi
     ? [
-        `Time ${formatDuration(metrics.missionElapsedS)}`,
-        fieldSizeLabel,
-        pressureLabel
+        `Time ${formatDuration(metrics.missionElapsedS)}`
       ]
     : [
         `Mission time ${formatDuration(metrics.missionElapsedS)}`,
@@ -64,8 +62,7 @@ export function SceneHud({
   const expandedStatusItems = isMobileUi
     ? [
         `Time ${formatDuration(metrics.missionElapsedS)}`,
-        `Speed ${formatSpeed(currentSpeedMps)}`,
-        modeLabel
+        `Power ${formatPower(drone.instantaneousPowerW)}`
       ]
     : [
         `Mission time ${formatDuration(metrics.missionElapsedS)}`,
@@ -107,12 +104,14 @@ export function SceneHud({
             </span>
           ))}
         </div>
-        <div className="scene-hud-grid">
-          <HudMetric label={isMobileUi ? "Power" : "Power draw"} value={formatPower(drone.instantaneousPowerW)} />
-          <HudMetric label={isMobileUi ? "Battery" : "Battery remaining"} value={formatKiloWattHours(drone.batteryWh)} accent />
-          <HudMetric label={isMobileUi ? "Kills" : "Neutralized"} value={String(metrics.beetlesNeutralized)} />
-          <HudMetric label={isMobileUi ? "Energy" : "Energy used"} value={formatKiloWattHours(metrics.totalEnergyWh)} />
-        </div>
+        {!isMobileUi ? (
+          <div className="scene-hud-grid">
+            <HudMetric label="Power draw" value={formatPower(drone.instantaneousPowerW)} />
+            <HudMetric label="Battery remaining" value={formatKiloWattHours(drone.batteryWh)} accent />
+            <HudMetric label="Neutralized" value={String(metrics.beetlesNeutralized)} />
+            <HudMetric label="Energy used" value={formatKiloWattHours(metrics.totalEnergyWh)} />
+          </div>
+        ) : null}
       </div>
       <div className="scene-attitude-shell">
         <AttitudeIndicator drone={drone} />

@@ -20,6 +20,7 @@ interface SimulationSceneProps {
   isExpanded: boolean;
   controlsHidden: boolean;
   isMobileUi: boolean;
+  mobileMenuOpen: boolean;
   playbackSpeed: number;
   playbackSpeedOptions: number[];
   onPlaybackSpeedChange: (value: number) => void;
@@ -900,6 +901,7 @@ export function SimulationScene({
   isExpanded,
   controlsHidden,
   isMobileUi,
+  mobileMenuOpen,
   playbackSpeed,
   playbackSpeedOptions,
   onPlaybackSpeedChange,
@@ -915,7 +917,7 @@ export function SimulationScene({
 
   return (
     <div className="scene-shell">
-      {isExpanded && !controlsHidden ? (
+      {isExpanded && !controlsHidden && (!isMobileUi || mobileMenuOpen) ? (
         <div className="scene-toolbar">
           <div className="scene-toolbar-copy">
             <label className="scene-select" data-tutorial-id="playback-control">

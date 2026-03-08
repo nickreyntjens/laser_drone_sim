@@ -141,6 +141,7 @@ export default function App(): JSX.Element {
   const [hasAutoShownTutorial, setHasAutoShownTutorial] = useState(false);
   const [tutorialStepIndex, setTutorialStepIndex] = useState<number | null>(null);
   const [tutorialRect, setTutorialRect] = useState<DOMRect | null>(null);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const watchSecondsRef = useRef(0);
   const buildToastTriggeredRef = useRef(false);
   const previousSummaryRef = useRef(false);
@@ -287,8 +288,15 @@ export default function App(): JSX.Element {
       setActiveOverlay(null);
       setTutorialStepIndex(null);
       setTutorialRect(null);
+      setMobileMenuOpen(false);
     }
   }, [isExpanded]);
+
+  useEffect(() => {
+    if (!isMobileUi) {
+      setMobileMenuOpen(false);
+    }
+  }, [isMobileUi]);
 
   useEffect(() => {
     if (isExpanded && !hasAutoShownTutorial && tutorialStepIndex === null && !controlsHidden) {
@@ -400,6 +408,7 @@ export default function App(): JSX.Element {
             isExpanded={isExpanded}
             controlsHidden={controlsHidden}
             isMobileUi={isMobileUi}
+            mobileMenuOpen={mobileMenuOpen}
             playbackSpeed={playbackSpeed}
             playbackSpeedOptions={[...PLAYBACK_SPEED_OPTIONS]}
             onPlaybackSpeedChange={setPlaybackSpeed}
@@ -485,7 +494,12 @@ export default function App(): JSX.Element {
                 </div>
               ) : (
                 <>
-                  <div className="scene-action-row">
+                  <div className="scene-action-row scene-action-row-mobile-toggle">
+                    {isMobileUi ? (
+                      <button className="secondary-button" onClick={() => setMobileMenuOpen((value) => !value)}>
+                        {mobileMenuOpen ? "Close menu" : "Menu"}
+                      </button>
+                    ) : null}
                     <button
                       className="secondary-button"
                       onClick={() => {
@@ -501,7 +515,7 @@ export default function App(): JSX.Element {
                       Hide buttons
                     </button>
                   </div>
-                  <div className="scene-action-row">
+                  <div className={isMobileUi && !mobileMenuOpen ? "scene-action-row scene-action-row-collapsed" : "scene-action-row"}>
                     <button
                       className={activeOverlay === "setup" ? "camera-button active" : "camera-button"}
                       data-tutorial-id="setup-button"
@@ -529,7 +543,7 @@ export default function App(): JSX.Element {
                       {isMobileUi ? "Notes" : "Model notes"}
                     </button>
                   </div>
-                  <div className="scene-action-row">
+                  <div className={isMobileUi && !mobileMenuOpen ? "scene-action-row scene-action-row-collapsed" : "scene-action-row"}>
                     <button className="secondary-button" onClick={tutorialVisible ? finishTutorial : startTutorial}>
                       {tutorialVisible ? "Skip tutorial" : "Tutorial"}
                     </button>

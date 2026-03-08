@@ -891,6 +891,10 @@ code {
   gap: 10px;
 }
 
+.scene-action-row-collapsed {
+  display: none;
+}
+
 .scene-toast-stack {
   position: absolute;
   top: 18px;
@@ -1093,6 +1097,10 @@ code {
     justify-content: flex-start;
   }
 
+  .scene-action-row-mobile-toggle {
+    grid-template-columns: 1fr 1fr;
+  }
+
   .scene-hud {
     bottom: 126px;
   }
@@ -1158,6 +1166,11 @@ code {
   }
 
   .scene-action-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .scene-action-row-mobile-toggle {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }

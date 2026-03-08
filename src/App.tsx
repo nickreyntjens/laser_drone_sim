@@ -22,8 +22,8 @@ type OverlayScreen = "setup" | "telemetry" | "report" | "notes" | "buildPrompt" 
 function readRuntimeConfig(): {
   startRunning: boolean;
   initialCameraMode: CameraMode;
-  embedMode: boolean;
   startExpanded: boolean;
+  markerModeOverride: "selected" | "all" | null;
 } {
   const search =
     typeof window !== "undefined"
@@ -41,8 +41,13 @@ function readRuntimeConfig(): {
   return {
     startRunning: search.get("autoplay") !== "0",
     initialCameraMode,
-    embedMode: search.get("embed") === "1",
-    startExpanded: search.get("expanded") === "1"
+    startExpanded: search.get("expanded") === "1",
+    markerModeOverride:
+      search.get("markers") === "all"
+        ? "all"
+        : search.get("markers") === "selected"
+          ? "selected"
+          : null
   };
 }
 
@@ -60,8 +65,20 @@ function parametersDiffer(a: SimulationParameters, b: SimulationParameters): boo
 
 export default function App(): JSX.Element {
   const runtimeConfig = useMemo(() => readRuntimeConfig(), []);
-  const [activeParams, setActiveParams] = useState<SimulationParameters>(defaultParameters);
-  const [draftParams, setDraftParams] = useState<SimulationParameters>(defaultParameters);
+  const initialParams = useMemo<SimulationParameters>(
+    () => ({
+      ...defaultParameters,
+      showOnlySelectedTargetMarkers:
+        runtimeConfig.markerModeOverride === "all"
+          ? false
+          : runtimeConfig.markerModeOverride === "selected"
+            ? true
+            : defaultParameters.showOnlySelectedTargetMarkers
+    }),
+    [runtimeConfig]
+  );
+  const [activeParams, setActiveParams] = useState<SimulationParameters>(initialParams);
+  const [draftParams, setDraftParams] = useState<SimulationParameters>(initialParams);
   const [seed, setSeed] = useState(DEFAULT_SEED);
   const [scenarioVersion, setScenarioVersion] = useState(0);
   const [cameraMode, setCameraMode] = useState<CameraMode>(runtimeConfig.initialCameraMode);
@@ -226,29 +243,7 @@ export default function App(): JSX.Element {
   }, [snapshot.summary]);
 
   return (
-    <div className={runtimeConfig.embedMode ? "app-shell app-shell-embed" : "app-shell"}>
-      <div className="page-glow page-glow-left" />
-      <div className="page-glow page-glow-right" />
-
-      {runtimeConfig.embedMode ? null : (
-        <header className="hero">
-          <div className="hero-copy">
-            <span className="eyebrow">Photonic Insecticides</span>
-            <h1>Laser-drone mission simulation for Colorado potato beetle control</h1>
-            <p>
-              This browser simulation pairs a physics-informed power budget with a premium 3D mission replay so a
-              technically minded visitor can inspect the energy ledger while a non-expert simply watches the system
-              patrol, detect, engage, recharge, and finish the job.
-            </p>
-          </div>
-          <div className="hero-chips">
-            <span>Gradient Poisson infestation model</span>
-            <span>Reserve-aware return to dock</span>
-            <span>Flight, hover, laser, and avionics energy accounting</span>
-          </div>
-        </header>
-      )}
-
+    <div className="app-shell app-shell-embed">
       <main className="main-grid">
         <section
           className={isExpanded ? "scene-stage scene-stage-expanded" : "scene-stage"}
@@ -395,7 +390,7 @@ export default function App(): JSX.Element {
                       {isRunning ? "Pause" : "Resume"}
                     </button>
                     <button className="secondary-button" onClick={() => setIsExpanded(false)}>
-                      Back to page
+                      Shrink
                     </button>
                   </div>
                 </>

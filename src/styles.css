@@ -87,6 +87,30 @@ code {
   padding: 32px 28px 40px;
 }
 
+.company-link {
+  position: fixed;
+  top: 14px;
+  left: 14px;
+  z-index: 20;
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(150, 211, 181, 0.2);
+  background: rgba(8, 15, 13, 0.82);
+  color: var(--text);
+  text-decoration: none;
+  backdrop-filter: blur(14px);
+}
+
+.company-link:hover {
+  border-color: rgba(150, 211, 181, 0.4);
+}
+
+.company-link-button {
+  text-decoration: none;
+}
+
 .app-shell-embed {
   max-width: none;
   min-height: 100%;
@@ -191,6 +215,29 @@ code {
   align-items: center;
   width: 100%;
   min-height: 100%;
+}
+
+.standalone-company-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--panel-border);
+  background: rgba(10, 18, 16, 0.62);
+  color: var(--muted);
+  backdrop-filter: blur(16px);
+}
+
+.standalone-company-link a {
+  color: var(--accent);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.standalone-company-link a:hover {
+  text-decoration: underline;
 }
 
 .scene-stage {

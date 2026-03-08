@@ -115,6 +115,7 @@ const TUTORIAL_STEPS: TutorialStep[] = [
 
 export default function App(): JSX.Element {
   const runtimeConfig = useMemo(() => readRuntimeConfig(), []);
+  const isEmbedded = typeof window !== "undefined" && window.parent !== window;
   const initialParams = useMemo<SimulationParameters>(
     () => ({
       ...defaultParameters,
@@ -146,6 +147,7 @@ export default function App(): JSX.Element {
   const buildToastTriggeredRef = useRef(false);
   const previousSummaryRef = useRef(false);
   const { isMobileUi } = useResponsiveUi();
+  const isStandalonePage = typeof window !== "undefined" && window.parent === window;
 
   const {
     engineRef,
@@ -395,6 +397,16 @@ export default function App(): JSX.Element {
 
   return (
     <div className="app-shell app-shell-embed">
+      {!isEmbedded && !isExpanded ? (
+        <a
+          className="company-link"
+          href="https://www.photonicinsecticides.com"
+          target="_blank"
+          rel="noreferrer"
+        >
+          Photonic insecticides
+        </a>
+      ) : null}
       <main className="main-grid">
         <section
           className={isExpanded ? "scene-stage scene-stage-expanded" : "scene-stage"}
@@ -556,6 +568,16 @@ export default function App(): JSX.Element {
                     <button className="secondary-button" onClick={() => setViewportExpanded(false, true)}>
                       Shrink
                     </button>
+                    {!isEmbedded ? (
+                      <a
+                        className="secondary-button company-link-button"
+                        href="https://www.photonicinsecticides.com"
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Photonic insecticides
+                      </a>
+                    ) : null}
                   </div>
                 </>
               )
@@ -615,6 +637,15 @@ export default function App(): JSX.Element {
             </div>
           ) : null}
         </section>
+
+        {isStandalonePage ? (
+          <div className="standalone-company-link">
+            <span>Built for</span>
+            <a href="https://www.photonicinsecticides.com" target="_blank" rel="noreferrer">
+              Photonic insecticides
+            </a>
+          </div>
+        ) : null}
       </main>
     </div>
   );

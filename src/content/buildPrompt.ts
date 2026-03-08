@@ -1,5 +1,8 @@
 export const BUILD_PROMPT = `In ChatGPT codex version 5.4 paste the following:
 
+Inspect the GitHub repo for the current implementation and design baseline before making changes:
+https://github.com/nickreyntjens/laser_drone_sim
+
 Build a browser-based visual simulation for https://photonicinsecticides.com that demonstrates the feasibility of a laser-equipped drone eliminating Colorado potato beetles in a potato field.
 
 The simulation must do two things at once:
@@ -73,6 +76,7 @@ Visual/animation requirements:
 - camera controls or curated camera angles
 - all beetles must be visible from the beginning of the intro sequence; they should not pop into existence later
 - have the beetles visibly fall onto the field at the beginning of the simulation
+- add an option to hide all non-selected target markers and make that the default so the viewport is less cluttered
 
 UI requirements:
 - Setup, telemetry, mission report, and model notes must be pop-up panels/dialogs.

@@ -9,6 +9,7 @@ export const defaultParameters: SimulationParameters = {
   fieldLengthM: 400,
   fieldWidthM: 250,
   targetingMode: "search",
+  showOnlySelectedTargetMarkers: true,
   edgeDensityPerHectare: 400,
   gradientStrength: 9,
   batteryCapacityWh: 140,

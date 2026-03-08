@@ -173,6 +173,16 @@ export function ControlPanel({
               { label: "Known locations", value: "preSurveyed" }
             ]}
           />
+          <ChoiceField
+            label="Target markers"
+            paramKey="showOnlySelectedTargetMarkers"
+            value={draftParams.showOnlySelectedTargetMarkers}
+            onParamChange={onParamChange}
+            options={[
+              { label: "Selected only", value: true },
+              { label: "Show all", value: false }
+            ]}
+          />
         </div>
 
         <div className="control-group">

@@ -8,6 +8,7 @@ import { clamp } from "../sim/defaults";
 import { MissionEngine } from "../sim/engine";
 import { getBeetleIntroVisualState } from "../sim/intro";
 import { SimulationSnapshot, TargetState, Vec3 } from "../sim/types";
+import { shouldRenderMarkerForTarget } from "../sim/visuals";
 
 export type CameraMode = "follow" | "overview" | "dock" | "manual";
 
@@ -647,6 +648,11 @@ function BeetleMarker({
   const beaconHeight = scale * 2.9 * visibilityBoost;
   const beaconRadius = scale * (active ? 0.72 : 0.58) * visibilityBoost;
   const beaconStemRadius = scale * 0.11 * Math.sqrt(visibilityBoost);
+  const showMarker = shouldRenderMarkerForTarget(
+    target,
+    active,
+    snapshot.params.showOnlySelectedTargetMarkers
+  );
 
   return (
     <group
@@ -686,9 +692,9 @@ function BeetleMarker({
           roughness={0.46}
         />
       </mesh>
-      {target.alive ? (
+      {showMarker ? (
         <>
-          {/* Visual beacon is deliberately non-physical so all seeded beetles remain legible from the intro overview. */}
+          {/* Marker beacon is deliberately non-physical; it can be hidden for non-selected targets to reduce clutter. */}
           <mesh position={[0, beaconHeight * 0.48, 0]}>
             <cylinderGeometry args={[beaconStemRadius, beaconStemRadius, beaconHeight, 12]} />
             <meshBasicMaterial color={haloColor} transparent opacity={haloOpacity * 0.42} depthWrite={false} />

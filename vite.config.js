@@ -13,14 +13,8 @@ export default defineConfig({
                     if (!id.includes("node_modules")) {
                         return undefined;
                     }
-                    if (id.includes("@react-three")) {
-                        return "react-three";
-                    }
                     if (id.includes("three")) {
                         return "three-core";
-                    }
-                    if (id.includes("react")) {
-                        return "react-vendor";
                     }
                     return "vendor";
                 }

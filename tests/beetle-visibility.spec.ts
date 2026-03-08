@@ -37,7 +37,7 @@ type BeetlePixelProbe = {
 test("intro overview shows multiple beetles in the rendered frame at once", async ({
   page
 }, testInfo) => {
-  await page.goto("/?autoplay=0&visualTest=1&camera=overview");
+  await page.goto("/?autoplay=0&visualTest=1&camera=overview&markers=all");
 
   await page.waitForFunction(() => {
     const state = window.__PHOTONIC_TEST_STATE__;

@@ -23,6 +23,7 @@ export interface SimulationParameters {
   fieldLengthM: number;
   fieldWidthM: number;
   targetingMode: TargetingMode;
+  showOnlySelectedTargetMarkers: boolean;
   edgeDensityPerHectare: number;
   gradientStrength: number;
   batteryCapacityWh: number;

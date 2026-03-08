@@ -566,7 +566,10 @@ export default function App(): JSX.Element {
             <div
               className="tutorial-callout"
               style={{
-                top: Math.min(tutorialRect.bottom + 14, window.innerHeight - 164),
+                top:
+                  tutorialRect.top > 180
+                    ? Math.max(18, tutorialRect.top - 150)
+                    : Math.min(tutorialRect.bottom + 14, window.innerHeight - 164),
                 left: Math.min(
                   Math.max(tutorialRect.left, 18),
                   Math.max(18, window.innerWidth - 330)

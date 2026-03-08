@@ -15,16 +15,8 @@ export default defineConfig({
             return undefined;
           }
 
-          if (id.includes("@react-three")) {
-            return "react-three";
-          }
-
           if (id.includes("three")) {
             return "three-core";
-          }
-
-          if (id.includes("react")) {
-            return "react-vendor";
           }
 
           return "vendor";

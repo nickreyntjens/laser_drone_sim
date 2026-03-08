@@ -916,10 +916,20 @@ export function SimulationScene({
       {isExpanded && !controlsHidden ? (
         <div className="scene-toolbar">
           <div className="scene-toolbar-copy">
-            <label className="scene-select">
-              <span>Playback</span>
+            <label className="scene-select" data-tutorial-id="playback-control">
+              <span className="inline-label">
+                Playback
+                <span
+                  className="info-hint"
+                  title="Speeds up playback without using a coarser mission timestep, so the simulation stays smooth and physically consistent."
+                  aria-label="Playback speed help"
+                >
+                  i
+                </span>
+              </span>
               <select
                 value={String(playbackSpeed)}
+                aria-label="Playback speed"
                 onChange={(event) => onPlaybackSpeedChange(Number(event.target.value))}
               >
                 {playbackSpeedOptions.map((option) => (

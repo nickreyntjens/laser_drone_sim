@@ -18,6 +18,12 @@ import { SimulationParameters } from "./sim/types";
 
 type CameraMode = "follow" | "overview" | "dock" | "manual";
 type OverlayScreen = "setup" | "telemetry" | "report" | "notes" | "buildPrompt" | null;
+type TutorialStep = {
+  id: string;
+  selector: string;
+  title: string;
+  body: string;
+};
 type ParentViewportMessage =
   | {
       source: "photonic-laser-drone-sim";
@@ -85,6 +91,28 @@ function parametersDiffer(a: SimulationParameters, b: SimulationParameters): boo
   return false;
 }
 
+const TUTORIAL_STORAGE_KEY = "photonic-laser-drone-sim.tutorialComplete";
+const TUTORIAL_STEPS: TutorialStep[] = [
+  {
+    id: "setup",
+    selector: '[data-tutorial-id="setup-button"]',
+    title: "Setup",
+    body: "Configure beetle pressure, field size, drone properties, firing limits, and recharge assumptions."
+  },
+  {
+    id: "telemetry",
+    selector: '[data-tutorial-id="telemetry-button"]',
+    title: "Telemetry",
+    body: "Check battery state, energy use, cost per hectare, and the live mission mode while the sortie runs."
+  },
+  {
+    id: "playback",
+    selector: '[data-tutorial-id="playback-control"]',
+    title: "Playback",
+    body: "Speed the simulation up when you want to skip ahead and inspect the end of the mission faster."
+  }
+];
+
 export default function App(): JSX.Element {
   const runtimeConfig = useMemo(() => readRuntimeConfig(), []);
   const initialParams = useMemo<SimulationParameters>(
@@ -110,6 +138,9 @@ export default function App(): JSX.Element {
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(PLAYBACK_SPEED);
   const [showBuildToast, setShowBuildToast] = useState(false);
   const [showMissionCompleteToast, setShowMissionCompleteToast] = useState(false);
+  const [tutorialComplete, setTutorialComplete] = useState(false);
+  const [tutorialStepIndex, setTutorialStepIndex] = useState<number | null>(null);
+  const [tutorialRect, setTutorialRect] = useState<DOMRect | null>(null);
   const watchSecondsRef = useRef(0);
   const buildToastTriggeredRef = useRef(false);
   const previousSummaryRef = useRef(false);
@@ -135,12 +166,29 @@ export default function App(): JSX.Element {
     () => parametersDiffer(activeParams, draftParams),
     [activeParams, draftParams]
   );
+  const tutorialStep = tutorialStepIndex === null ? null : TUTORIAL_STEPS[tutorialStepIndex];
+  const tutorialVisible = isExpanded && !controlsHidden && tutorialStep !== null;
 
   const setViewportExpanded = (nextValue: boolean, syncParent = false): void => {
     setIsExpanded(nextValue);
     if (syncParent) {
       notifyParentViewportMode(nextValue ? "make-big" : "shrink");
     }
+  };
+
+  const finishTutorial = (): void => {
+    setTutorialStepIndex(null);
+    setTutorialRect(null);
+    setTutorialComplete(true);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(TUTORIAL_STORAGE_KEY, "1");
+    }
+  };
+
+  const startTutorial = (): void => {
+    setControlsHidden(false);
+    setActiveOverlay(null);
+    setTutorialStepIndex(0);
   };
 
   const applyDraft = (): void => {
@@ -211,6 +259,14 @@ export default function App(): JSX.Element {
   }, [isExpanded]);
 
   useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    setTutorialComplete(window.localStorage.getItem(TUTORIAL_STORAGE_KEY) === "1");
+  }, []);
+
+  useEffect(() => {
     if (!isExpanded || typeof window === "undefined") {
       return;
     }
@@ -240,8 +296,52 @@ export default function App(): JSX.Element {
     if (!isExpanded) {
       setControlsHidden(false);
       setActiveOverlay(null);
+      setTutorialStepIndex(null);
+      setTutorialRect(null);
     }
   }, [isExpanded]);
+
+  useEffect(() => {
+    if (isExpanded && !tutorialComplete && tutorialStepIndex === null && !controlsHidden) {
+      startTutorial();
+    }
+  }, [controlsHidden, isExpanded, tutorialComplete, tutorialStepIndex]);
+
+  useEffect(() => {
+    if (!tutorialVisible || !tutorialStep || typeof window === "undefined") {
+      return;
+    }
+
+    const updateRect = (): void => {
+      const element = document.querySelector(tutorialStep.selector);
+      if (!(element instanceof HTMLElement)) {
+        return;
+      }
+      setTutorialRect(element.getBoundingClientRect());
+    };
+
+    updateRect();
+    window.addEventListener("resize", updateRect);
+
+    const currentStepIndex = tutorialStepIndex;
+    const timer = window.setTimeout(() => {
+      if (currentStepIndex === null) {
+        return;
+      }
+
+      if (currentStepIndex >= TUTORIAL_STEPS.length - 1) {
+        finishTutorial();
+        return;
+      }
+
+      setTutorialStepIndex(currentStepIndex + 1);
+    }, 4200);
+
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("resize", updateRect);
+    };
+  }, [tutorialStep, tutorialStepIndex, tutorialVisible]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -412,12 +512,14 @@ export default function App(): JSX.Element {
                   <div className="scene-action-row">
                     <button
                       className={activeOverlay === "setup" ? "camera-button active" : "camera-button"}
+                      data-tutorial-id="setup-button"
                       onClick={() => toggleOverlay("setup")}
                     >
                       Setup
                     </button>
                     <button
                       className={activeOverlay === "telemetry" ? "camera-button active" : "camera-button"}
+                      data-tutorial-id="telemetry-button"
                       onClick={() => toggleOverlay("telemetry")}
                     >
                       Telemetry
@@ -436,6 +538,9 @@ export default function App(): JSX.Element {
                     </button>
                   </div>
                   <div className="scene-action-row">
+                    <button className="secondary-button" onClick={tutorialVisible ? finishTutorial : startTutorial}>
+                      {tutorialVisible ? "Skip tutorial" : "Tutorial"}
+                    </button>
                     <button className="secondary-button" onClick={restartMission}>
                       Restart
                     </button>
@@ -451,11 +556,36 @@ export default function App(): JSX.Element {
             ) : (
                 <div className="scene-action-row">
                   <button className="secondary-button" onClick={() => setViewportExpanded(true, true)}>
-                    Get big
+                    Get big and configure
                   </button>
                 </div>
             )}
           </div>
+
+          {tutorialVisible && tutorialRect ? (
+            <div
+              className="tutorial-callout"
+              style={{
+                top: Math.min(tutorialRect.bottom + 14, window.innerHeight - 164),
+                left: Math.min(
+                  Math.max(tutorialRect.left, 18),
+                  Math.max(18, window.innerWidth - 330)
+                )
+              }}
+            >
+              <span className="eyebrow">Quick tour</span>
+              <strong>{tutorialStep.title}</strong>
+              <p>{tutorialStep.body}</p>
+              <div className="tutorial-progress">
+                {TUTORIAL_STEPS.map((step, index) => (
+                  <span
+                    key={step.id}
+                    className={index === tutorialStepIndex ? "tutorial-dot active" : "tutorial-dot"}
+                  />
+                ))}
+              </div>
+            </div>
+          ) : null}
 
           {overlayContent ? (
             <div className="scene-overlay-backdrop" onClick={() => setActiveOverlay(null)}>

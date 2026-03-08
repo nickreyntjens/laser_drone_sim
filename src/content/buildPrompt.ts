@@ -81,12 +81,14 @@ Visual/animation requirements:
 UI requirements:
 - Setup, telemetry, mission report, and model notes must be pop-up panels/dialogs.
 - The app must support a compact small mode for use under a webpage hero, plus a larger immersive mode like a YouTube player expansion.
-    - In small mode, only mission time, field size, beetle pressure, state, and a "Get big" control should appear on the visual canvas.
+    - In small mode, only mission time, field size, beetle pressure, state, and a "Get big and configure" control should appear on the visual canvas.
     - In big mode, provide a clean-viewport mode that hides buttons, labels, and telemetry overlays, while keeping a single toggle visible so the user can restore the rest of the controls; the attitude / horizon instrument should remain visible in that mode.
-    - Add a playback-speed dropdown with values 1x, 2x, 5.25x, 10.5x, 20x, and 40x.
+    - Add a playback-speed dropdown with values 1x, 2x, 5.25x, 10.5x, 20x, and 40x, and default it to 1x.
     - If algorithmically possible, playback speed should change render-time speedup without degrading simulation time granularity; use fixed simulation substeps instead of simply multiplying the integrator timestep.
     - Show main on-canvas telemetry in big mode: mission time, current speed, state, field size, beetle pressure, instantaneous power, battery remaining in kWh, and beetles neutralized.
     - Add a compact artificial-horizon / attitude indicator in the top-right corner of the big viewport, roughly half the size of the previous instrument treatment.
+    - Add contextual tooltips or small info icons for options whose meaning is not immediately obvious, such as Known locations and playback speed.
+    - The first time the user expands into big mode, show a short guided tutorial with sequential callouts for Setup, Telemetry, and Playback. After that, expose a Tutorial button so the tour can be replayed on demand.
 - Expose parameters including:
   - field width and length
   - beetle pressure
@@ -124,6 +126,7 @@ Performance requirements:
 Default scientific assumptions:
 - default drone mass: 1 kg
 - default shot energy: 10 joules
+- default mission mode: known locations / pre-surveyed
 
 Implementation deliverables:
 1. Full source code

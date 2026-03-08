@@ -35,15 +35,25 @@ interface SliderFieldProps<K extends keyof SimulationParameters> {
 interface ChoiceFieldProps<K extends keyof SimulationParameters> {
   label: string;
   paramKey: K;
+  helpText?: string;
   options: Array<{
     label: string;
     value: SimulationParameters[K];
+    description?: string;
   }>;
   value: SimulationParameters[K];
   onParamChange: <T extends keyof SimulationParameters>(
     key: T,
     value: SimulationParameters[T]
   ) => void;
+}
+
+function InfoHint({ text }: { text: string }): JSX.Element {
+  return (
+    <span className="info-hint" title={text} aria-label={text}>
+      i
+    </span>
+  );
 }
 
 function SliderField<K extends keyof SimulationParameters>({
@@ -85,6 +95,7 @@ function SliderField<K extends keyof SimulationParameters>({
 function ChoiceField<K extends keyof SimulationParameters>({
   label,
   paramKey,
+  helpText,
   options,
   value,
   onParamChange
@@ -92,7 +103,10 @@ function ChoiceField<K extends keyof SimulationParameters>({
   return (
     <div className="choice-field">
       <span className="slider-header">
-        <span>{label}</span>
+        <span className="inline-label">
+          {label}
+          {helpText ? <InfoHint text={helpText} /> : null}
+        </span>
       </span>
       <div className="choice-chip-row">
         {options.map((option) => (
@@ -100,6 +114,10 @@ function ChoiceField<K extends keyof SimulationParameters>({
             key={String(option.value)}
             type="button"
             className={value === option.value ? "camera-button active" : "camera-button"}
+            title={option.description}
+            aria-label={
+              option.description ? `${option.label}. ${option.description}` : option.label
+            }
             onClick={() => onParamChange(paramKey, option.value)}
           >
             {option.label}
@@ -168,9 +186,18 @@ export function ControlPanel({
             paramKey="targetingMode"
             value={draftParams.targetingMode}
             onParamChange={onParamChange}
+            helpText="Choose whether the drone searches for beetles live or flies directly to beetles already identified in prior scouting imagery."
             options={[
-              { label: "Live search", value: "search" },
-              { label: "Known locations", value: "preSurveyed" }
+              {
+                label: "Live search",
+                value: "search",
+                description: "The drone sweeps the field, detects beetles during flight, and then engages them."
+              },
+              {
+                label: "Known locations",
+                value: "preSurveyed",
+                description: "The drone assumes beetle coordinates are already known from prior drone footage and routes directly to them."
+              }
             ]}
           />
           <ChoiceField
@@ -178,9 +205,18 @@ export function ControlPanel({
             paramKey="showOnlySelectedTargetMarkers"
             value={draftParams.showOnlySelectedTargetMarkers}
             onParamChange={onParamChange}
+            helpText="Reduce clutter by showing only the currently selected target marker, or show marker beacons for every target."
             options={[
-              { label: "Selected only", value: true },
-              { label: "Show all", value: false }
+              {
+                label: "Selected only",
+                value: true,
+                description: "Only the actively selected beetle keeps a marker beacon on screen."
+              },
+              {
+                label: "Show all",
+                value: false,
+                description: "Every beetle marker stays visible, which is useful for debugging or overview shots."
+              }
             ]}
           />
         </div>

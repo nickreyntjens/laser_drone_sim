@@ -435,6 +435,7 @@ describe("MissionEngine", () => {
     const params = createTestParams({
       fieldLengthM: 60,
       fieldWidthM: 18,
+      targetingMode: "search",
       batteryCapacityWh: 14,
       reserveBatteryPct: 16,
       rechargeTimeMin: 0.2
@@ -601,6 +602,7 @@ describe("MissionEngine", () => {
     const params = createTestParams({
       fieldLengthM: 400,
       fieldWidthM: 250,
+      targetingMode: "search",
       edgeDensityPerHectare: 1600,
       gradientStrength: 9,
       batteryCapacityWh: 320,

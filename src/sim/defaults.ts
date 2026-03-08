@@ -1,6 +1,6 @@
 import { SimulationParameters } from "./types";
 
-export const PLAYBACK_SPEED = 5.25;
+export const PLAYBACK_SPEED = 1;
 export const PLAYBACK_SPEED_OPTIONS = [1, 2, 5.25, 10.5, 20, 40] as const;
 export const RENDER_SCALE_M_PER_UNIT = 5;
 export const DEFAULT_SEED = 17;
@@ -8,7 +8,7 @@ export const DEFAULT_SEED = 17;
 export const defaultParameters: SimulationParameters = {
   fieldLengthM: 400,
   fieldWidthM: 250,
-  targetingMode: "search",
+  targetingMode: "preSurveyed",
   showOnlySelectedTargetMarkers: true,
   edgeDensityPerHectare: 400,
   gradientStrength: 9,

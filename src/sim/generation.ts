@@ -31,21 +31,20 @@ export function generateTargets(
   const rng = createRng(seed);
   const fieldArea = params.fieldLengthM * params.fieldWidthM;
   const fieldAreaHectares = fieldArea / 10_000;
-  const lambdaMax = params.edgeDensityPerHectare * fieldAreaHectares;
-  const candidateCount = samplePoisson(lambdaMax, rng);
+  const targetCountMean = params.edgeDensityPerHectare * fieldAreaHectares;
+  const targetCount = samplePoisson(targetCountMean, rng);
   const rowCount = Math.max(1, Math.round(params.fieldWidthM / params.rowSpacingM));
   const accepted: TargetState[] = [];
+  const decay = Math.max(params.gradientStrength, 1e-6);
+  const expNegDecay = Math.exp(-decay);
 
-  for (let index = 0; index < candidateCount; index += 1) {
-    const x = rng() * params.fieldLengthM;
+  for (let index = 0; index < targetCount; index += 1) {
+    const depthUnit =
+      decay < 1e-3
+        ? rng()
+        : -Math.log(1 - rng() * (1 - expNegDecay)) / decay;
+    const x = clamp(depthUnit * params.fieldLengthM, 0, params.fieldLengthM);
     const z = rng() * params.fieldWidthM;
-    const acceptance = Math.exp(
-      -params.gradientStrength * (x / Math.max(params.fieldLengthM, 1))
-    );
-
-    if (rng() > acceptance) {
-      continue;
-    }
 
     const rowIndex = clamp(
       Math.round(z / params.rowSpacingM),

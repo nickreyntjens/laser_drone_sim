@@ -6,6 +6,7 @@ import { MethodologyPanel } from "./components/MethodologyPanel";
 import { SceneHud } from "./components/SceneHud";
 import { SimulationScene } from "./components/SimulationScene";
 import { SummaryPanel } from "./components/SummaryPanel";
+import { useMissionAudio } from "./hooks/useMissionAudio";
 import { useMissionController } from "./hooks/useMissionController";
 import { useResponsiveUi } from "./hooks/useResponsiveUi";
 import { formatDuration } from "./lib/format";
@@ -165,6 +166,7 @@ export default function App(): JSX.Element {
     runtimeConfig.startRunning
   );
   const interactiveButtonsVisible = isExpanded && !controlsHidden;
+  const { soundEnabled, toggleSound } = useMissionAudio(snapshot);
 
   const hasPendingChanges = useMemo(
     () => parametersDiffer(activeParams, draftParams),
@@ -556,6 +558,9 @@ export default function App(): JSX.Element {
                     </button>
                   </div>
                   <div className={isMobileUi && !mobileMenuOpen ? "scene-action-row scene-action-row-collapsed" : "scene-action-row"}>
+                    <button className="secondary-button" onClick={toggleSound}>
+                      {soundEnabled ? "Sound on" : "Sound off"}
+                    </button>
                     <button className="secondary-button" onClick={tutorialVisible ? finishTutorial : startTutorial}>
                       {tutorialVisible ? "Skip tutorial" : "Tutorial"}
                     </button>

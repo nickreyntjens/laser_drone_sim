@@ -622,13 +622,15 @@ describe("MissionEngine", () => {
       enableDebugLogging: true
     });
 
-    expect(engine.targets.length).toBeGreaterThan(800);
-    expect(engine.targets.length).toBeLessThan(3500);
+    expect(engine.targets.length).toBeGreaterThan(12_000);
+    expect(engine.targets.length).toBeLessThan(20_000);
 
     stepSeconds(engine, 4, 0.05);
 
     expect(engine.pathHistory.length).toBeGreaterThan(2);
-    expect(engine.drone.mode === "takeoff" || engine.drone.mode === "searching").toBe(true);
+    expect(["takeoff", "searching", "approach", "aiming", "firing", "confirming"]).toContain(
+      engine.drone.mode
+    );
     expect(Number.isFinite(engine.drone.position.x)).toBe(true);
     expect(Number.isFinite(engine.drone.position.z)).toBe(true);
     assertNoStuckWarnings(engine);

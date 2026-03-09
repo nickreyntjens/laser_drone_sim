@@ -79,6 +79,7 @@ npm run test:visual
 
 - Beetles are generated with a non-uniform Poisson point process.
 - The maximum intensity is set by the invasion-edge density control in beetles per hectare.
+- The requested beetles-per-hectare value sets the expected total beetle count over the whole field; the decay parameter redistributes those beetles toward the invasion edge instead of reducing the total population.
 - Acceptance probability decays exponentially with distance from the invasion edge, producing higher pressure at one field boundary and lower pressure deeper into the crop.
 - Accepted points are snapped onto crop rows with small canopy-scale jitter so the targets read as being on or near potato plants rather than uniformly scattered in open space.
 

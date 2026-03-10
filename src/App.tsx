@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BuildPromptPanel } from "./components/BuildPromptPanel";
 import { ControlPanel } from "./components/ControlPanel";
+import { GuideAvatar } from "./components/GuideAvatar";
+import { GuideSetupPanel } from "./components/GuideSetupPanel";
 import { LiveMetrics } from "./components/LiveMetrics";
 import { MethodologyPanel } from "./components/MethodologyPanel";
 import {
@@ -13,8 +15,10 @@ import { SafetyEditorPreviewState, SimulationScene } from "./components/Simulati
 import { SummaryPanel } from "./components/SummaryPanel";
 import { useMissionAudio } from "./hooks/useMissionAudio";
 import { useMissionController } from "./hooks/useMissionController";
+import { useMissionGuide } from "./hooks/useMissionGuide";
 import { useResponsiveUi } from "./hooks/useResponsiveUi";
 import { formatDuration } from "./lib/format";
+import { buildBeamDiagramIntroLines } from "./content/guideScript";
 import {
   DEFAULT_SEED,
   PLAYBACK_SPEED,
@@ -26,21 +30,16 @@ import { applyFieldTypePreset } from "./sim/fieldProfiles";
 import { calculateSafetyMetrics, safetyInputFromParameters } from "./sim/safety";
 import { FieldType, MissionLogEvent, SimulationParameters } from "./sim/types";
 
-type CameraMode = "follow" | "overview" | "dock" | "manual";
+type CameraMode = "follow" | "followSide" | "overview" | "dock" | "manual";
 type OverlayScreen =
   | "setup"
   | "telemetry"
   | "report"
   | "notes"
+  | "guideSetup"
   | "buildPrompt"
   | "safetyZone"
   | null;
-type TutorialStep = {
-  id: string;
-  selector: string;
-  title: string;
-  body: string;
-};
 type ParentViewportMessage =
   | {
       source: "photonic-laser-drone-sim";
@@ -85,6 +84,7 @@ function readRuntimeConfig(): {
     requestedCamera === "overview" ||
     requestedCamera === "dock" ||
     requestedCamera === "manual" ||
+    requestedCamera === "followSide" ||
     requestedCamera === "follow"
       ? requestedCamera
       : "follow";
@@ -141,27 +141,6 @@ function createSafetyEditorDraft(
   };
 }
 
-const TUTORIAL_STEPS: TutorialStep[] = [
-  {
-    id: "setup",
-    selector: '[data-tutorial-id="setup-button"]',
-    title: "Setup",
-    body: "Configure field type, pest pressure, drone properties, firing limits, and recharge assumptions."
-  },
-  {
-    id: "telemetry",
-    selector: '[data-tutorial-id="telemetry-button"]',
-    title: "Telemetry",
-    body: "Check battery state, energy use, cost per hectare, and the live mission mode while the sortie runs."
-  },
-  {
-    id: "playback",
-    selector: '[data-tutorial-id="playback-control"]',
-    title: "Playback",
-    body: "Speed the simulation up when you want to skip ahead and inspect the end of the mission faster."
-  }
-];
-
 export default function App(): JSX.Element {
   const runtimeConfig = useMemo(() => readRuntimeConfig(), []);
   const isEmbedded = typeof window !== "undefined" && window.parent !== window;
@@ -197,9 +176,6 @@ export default function App(): JSX.Element {
   const [safetyEditorDraft, setSafetyEditorDraft] = useState<SafetyZoneEditorDraft | null>(
     runtimeConfig.startSafetyEditor ? createSafetyEditorDraft(initialParams) : null
   );
-  const [hasAutoShownTutorial, setHasAutoShownTutorial] = useState(false);
-  const [tutorialStepIndex, setTutorialStepIndex] = useState<number | null>(null);
-  const [tutorialRect, setTutorialRect] = useState<DOMRect | null>(null);
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
   const watchSecondsRef = useRef(0);
   const buildToastTriggeredRef = useRef(false);
@@ -258,14 +234,29 @@ export default function App(): JSX.Element {
   );
   const interactiveButtonsVisible = isExpanded && !controlsHidden;
   const { soundEnabled, toggleSound } = useMissionAudio(snapshot);
-
   const hasPendingChanges = useMemo(
     () => parametersDiffer(activeParams, draftParams),
     [activeParams, draftParams]
   );
-  const tutorialStep = tutorialStepIndex === null ? null : TUTORIAL_STEPS[tutorialStepIndex];
   const safetyEditorActive = activeOverlay === "safetyZone" && safetyEditorDraft !== null;
-  const tutorialVisible = isExpanded && !controlsHidden && tutorialStep !== null;
+  const {
+    guideEnabled,
+    toggleGuide,
+    silenceGuide,
+    currentDefinitionId,
+    disableLine,
+    disabledLineIds,
+    setLineEnabled,
+    announce,
+    currentCaption,
+    isSpeaking: guideSpeaking
+  } = useMissionGuide(snapshot, activeParams, {
+    isExpanded,
+    controlsHidden,
+    safetyEditorActive,
+    farmerSafetyToastVisible: farmerSafetyToast !== null,
+    nominalSafetyZoneRadiusM: farmerSafetyToast?.nominalSafetyZoneRadiusM ?? null
+  });
   const safetyEditorPreview = useMemo<SafetyEditorPreviewState | null>(() => {
     if (!safetyEditorDraft) {
       return null;
@@ -287,17 +278,6 @@ export default function App(): JSX.Element {
     if (syncParent) {
       notifyParentViewportMode(nextValue ? "make-big" : "shrink");
     }
-  };
-
-  const finishTutorial = (): void => {
-    setTutorialStepIndex(null);
-    setTutorialRect(null);
-  };
-
-  const startTutorial = (): void => {
-    setControlsHidden(false);
-    setActiveOverlay(null);
-    setTutorialStepIndex(0);
   };
 
   const applyDraft = (): void => {
@@ -356,8 +336,6 @@ export default function App(): JSX.Element {
   const openSafetyZoneEditor = (initialPreviewDistanceM?: number | null): void => {
     setViewportExpanded(true, true);
     setControlsHidden(false);
-    setTutorialStepIndex(null);
-    setTutorialRect(null);
     setFarmerSafetyToast(null);
     setSafetyEditorDraft(createSafetyEditorDraft(activeParams, initialPreviewDistanceM));
     setActionMenuOpen(false);
@@ -432,6 +410,11 @@ export default function App(): JSX.Element {
       <SummaryPanel summary={snapshot.summary} />
     ) : activeOverlay === "notes" ? (
       <MethodologyPanel snapshot={snapshot} onOpenBuildPrompt={() => openOverlay("buildPrompt")} />
+    ) : activeOverlay === "guideSetup" ? (
+      <GuideSetupPanel
+        disabledLineIds={disabledLineIds}
+        onToggleLine={setLineEnabled}
+      />
     ) : activeOverlay === "buildPrompt" ? (
       <BuildPromptPanel />
     ) : activeOverlay === "safetyZone" && safetyEditorDraft ? (
@@ -442,6 +425,16 @@ export default function App(): JSX.Element {
         }
         onApply={applySafetyZoneChanges}
         onClose={() => closeSafetyZoneEditor()}
+        onBeamDiagramOpen={() => {
+          const lines = buildBeamDiagramIntroLines();
+          lines.forEach((line, index) => {
+            announce(
+              index === 0 ? "beam-diagram-overview" : "beam-diagram-focus",
+              line,
+              () => activeOverlay === "safetyZone"
+            );
+          });
+        }}
       />
     ) : null;
 
@@ -502,59 +495,8 @@ export default function App(): JSX.Element {
       setActiveOverlay(null);
       setSafetyEditorDraft(null);
       setActionMenuOpen(false);
-      setTutorialStepIndex(null);
-      setTutorialRect(null);
     }
   }, [activeOverlay, isExpanded, setIsRunning]);
-
-  useEffect(() => {
-    if (
-      isExpanded &&
-      activeOverlay === null &&
-      !hasAutoShownTutorial &&
-      tutorialStepIndex === null &&
-      !controlsHidden
-    ) {
-      setHasAutoShownTutorial(true);
-      startTutorial();
-    }
-  }, [activeOverlay, controlsHidden, hasAutoShownTutorial, isExpanded, tutorialStepIndex]);
-
-  useEffect(() => {
-    if (!tutorialVisible || !tutorialStep || typeof window === "undefined") {
-      return;
-    }
-
-    const updateRect = (): void => {
-      const element = document.querySelector(tutorialStep.selector);
-      if (!(element instanceof HTMLElement)) {
-        return;
-      }
-      setTutorialRect(element.getBoundingClientRect());
-    };
-
-    updateRect();
-    window.addEventListener("resize", updateRect);
-
-    const currentStepIndex = tutorialStepIndex;
-    const timer = window.setTimeout(() => {
-      if (currentStepIndex === null) {
-        return;
-      }
-
-      if (currentStepIndex >= TUTORIAL_STEPS.length - 1) {
-        finishTutorial();
-        return;
-      }
-
-      setTutorialStepIndex(currentStepIndex + 1);
-    }, 4200);
-
-    return () => {
-      window.clearTimeout(timer);
-      window.removeEventListener("resize", updateRect);
-    };
-  }, [tutorialStep, tutorialStepIndex, tutorialVisible]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -742,6 +684,17 @@ export default function App(): JSX.Element {
             </div>
           ) : null}
 
+          <GuideAvatar
+            caption={currentCaption}
+            isSpeaking={guideSpeaking}
+            onSilence={silenceGuide}
+            onDisableLine={() => {
+              if (currentDefinitionId) {
+                disableLine(currentDefinitionId);
+              }
+            }}
+          />
+
           {!safetyEditorActive ? (
           <div className="scene-action-dock">
             {isExpanded ? (
@@ -784,7 +737,6 @@ export default function App(): JSX.Element {
                       <div className="scene-action-row">
                         <button
                           className={activeOverlay === "setup" ? "camera-button active" : "camera-button"}
-                          data-tutorial-id="setup-button"
                           onClick={() => {
                             toggleOverlay("setup");
                             setActionMenuOpen(false);
@@ -794,7 +746,6 @@ export default function App(): JSX.Element {
                         </button>
                         <button
                           className={activeOverlay === "telemetry" ? "camera-button active" : "camera-button"}
-                          data-tutorial-id="telemetry-button"
                           onClick={() => {
                             toggleOverlay("telemetry");
                             setActionMenuOpen(false);
@@ -827,12 +778,18 @@ export default function App(): JSX.Element {
                         </button>
                         <button
                           className="secondary-button"
+                          onClick={guideEnabled ? silenceGuide : toggleGuide}
+                        >
+                          {guideEnabled ? "Be silent" : "Guide on"}
+                        </button>
+                        <button
+                          className={activeOverlay === "guideSetup" ? "camera-button active" : "camera-button"}
                           onClick={() => {
-                            tutorialVisible ? finishTutorial() : startTutorial();
+                            toggleOverlay("guideSetup");
                             setActionMenuOpen(false);
                           }}
                         >
-                          {tutorialVisible ? "Skip tutorial" : "Tutorial"}
+                          Guide setup
                         </button>
                         <button className="secondary-button" onClick={restartMission}>
                           Restart
@@ -872,42 +829,6 @@ export default function App(): JSX.Element {
                 </div>
             )}
           </div>
-          ) : null}
-
-          {tutorialVisible && tutorialRect && !safetyEditorActive ? (
-            <div
-              className={isMobileUi ? "tutorial-callout tutorial-callout-mobile" : "tutorial-callout"}
-              style={{
-                ...(isMobileUi
-                  ? {
-                      left: 12,
-                      right: 12,
-                      bottom: 14
-                    }
-                  : {
-                      top:
-                        tutorialRect.top > 180
-                          ? Math.max(18, tutorialRect.top - 150)
-                          : Math.min(tutorialRect.bottom + 14, window.innerHeight - 164),
-                      left: Math.min(
-                        Math.max(tutorialRect.left, 18),
-                        Math.max(18, window.innerWidth - 330)
-                      )
-                    })
-              }}
-            >
-              <span className="eyebrow">Quick tour</span>
-              <strong>{tutorialStep.title}</strong>
-              <p>{tutorialStep.body}</p>
-              <div className="tutorial-progress">
-                {TUTORIAL_STEPS.map((step, index) => (
-                  <span
-                    key={step.id}
-                    className={index === tutorialStepIndex ? "tutorial-dot active" : "tutorial-dot"}
-                  />
-                ))}
-              </div>
-            </div>
           ) : null}
 
           {overlayContent ? (

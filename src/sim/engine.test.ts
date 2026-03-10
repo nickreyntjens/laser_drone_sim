@@ -1015,6 +1015,53 @@ describe("MissionEngine", () => {
     assertNoStuckWarnings(engine);
   });
 
+  it("marks an unresolved greenhouse target as neutralized after a prolonged blocked engagement", () => {
+    const params = applyFieldTypePreset(
+      createTestParams({
+        fieldType: "greenhouseTulipCaterpillar",
+        fieldLengthM: 60,
+        fieldWidthM: 18,
+        rowSpacingM: 0.45,
+        laneSpacingM: 2.25,
+        searchAltitudeM: 2.15,
+        engageAltitudeM: 1.3,
+        detectionRadiusM: 1.9,
+        safetyFocalDistanceM: 0.45,
+        cruiseSpeedMps: 2.8,
+        farmersPerHectare: 0
+      }),
+      "greenhouseTulipCaterpillar"
+    );
+    const engine = buildEngine([
+      createGreenhouseTarget(
+        0,
+        { x: 6, y: 0.46, z: 4.5 },
+        { x: 6, y: 0.24, z: 4.5 }
+      )
+    ], { params });
+
+    runUntil(engine, () => engine.drone.mode === "approach" && engine.drone.activeTargetId === 0, 12);
+
+    const objective = (engine as any).currentMotionTarget();
+    const progressProbe = (engine as any).progressProbe;
+    const currentPosition = { ...engine.drone.position };
+    progressProbe.mode = "approach";
+    progressProbe.targetId = 0;
+    progressProbe.lastDistanceM = distanceBetween(currentPosition, objective);
+    progressProbe.lastPosition = currentPosition;
+    progressProbe.staleForS = 16;
+    (engine as any).activeTargetAssignedAtS = (engine as any).missionElapsedS - 20;
+
+    engine.step(0.05);
+
+    expect(engine.targets[0].alive).toBe(false);
+    expect(
+      engine.getDebugLog().some(
+        (entry) => entry.event === "target-neutralized" && entry.data?.assumedNeutralized === true
+      )
+    ).toBe(true);
+  });
+
   it("maintains separation from a farmer during a fast low-altitude approach", () => {
     const engine = buildEngine([createTarget(0, 18, 36)], {
       params: createTestParams({

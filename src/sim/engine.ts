@@ -88,6 +88,8 @@ const ORCHARD_OBJECTIVE_MARGIN_M = 0.22;
 const GREENHOUSE_COLUMN_CLEARANCE_M = 0.34;
 const GREENHOUSE_COLUMN_INFLUENCE_M = 1.6;
 const GREENHOUSE_COLUMN_EVASION_MPS = 1.05;
+const TARGET_STALE_TIMEOUT_AFTER_S = 16;
+const TARGET_HARD_TIMEOUT_AFTER_S = 36;
 
 function cloneVec3(source: Vec3): Vec3 {
   return { x: source.x, y: source.y, z: source.z };
@@ -296,6 +298,8 @@ export class MissionEngine {
 
   private requiredFiringDwellS: number;
 
+  private activeTargetAssignedAtS: number | null;
+
   constructor(
     params: SimulationParameters,
     seed = DEFAULT_SEED,
@@ -338,6 +342,7 @@ export class MissionEngine {
     this.debugLog = [];
     this.dockDirective = "resume";
     this.requiredFiringDwellS = params.engagementDwellS;
+    this.activeTargetAssignedAtS = null;
 
     this.drone = {
       position: cloneVec3(this.dockPosition),
@@ -353,6 +358,7 @@ export class MissionEngine {
       activeTargetId: this.targetQueue[0] ?? null,
       activeWaypointIndex: 0
     };
+    this.activeTargetAssignedAtS = this.drone.activeTargetId === null ? null : 0;
     this.progressProbe = {
       mode: this.drone.mode,
       targetId: this.drone.activeTargetId,
@@ -432,6 +438,7 @@ export class MissionEngine {
     this.checkFarmerSafetyInterference();
     this.processModeTransitions();
     this.updateStuckMonitor(simDt);
+    this.applyEngagementTimeoutFallback();
 
     const power = this.samplePower();
     this.applyPower(power, simDt);
@@ -1744,6 +1751,13 @@ export class MissionEngine {
   }
 
   private neutralizeActiveTarget(): void {
+    this.neutralizeActiveTargetWithReason();
+  }
+
+  private neutralizeActiveTargetWithReason(
+    reason = `Neutralized beetle ${this.drone.activeTargetId ?? "unknown"}`,
+    data?: MissionLogEvent["data"]
+  ): void {
     if (this.drone.activeTargetId === null) {
       return;
     }
@@ -1760,12 +1774,46 @@ export class MissionEngine {
     target.neutralizedAtS = this.missionElapsedS;
     this.neutralizedCount += 1;
     this.targetQueue = this.targetQueue.filter((targetId) => targetId !== this.drone.activeTargetId);
-    this.logEvent("target-neutralized", `Neutralized beetle ${target.id}`, {
+    this.logEvent("target-neutralized", reason, {
       targetId: target.id,
-      remainingTargets: this.targets.filter((entry) => entry.alive).length
+      remainingTargets: this.targets.filter((entry) => entry.alive).length,
+      ...data
     });
     this.pruneTargetQueue("neutralizeActiveTarget");
     this.setActiveTarget(this.pickNextQueuedTarget(), "post-neutralization selection");
+  }
+
+  private applyEngagementTimeoutFallback(): void {
+    if (
+      this.drone.activeTargetId === null ||
+      this.activeTargetAssignedAtS === null ||
+      (this.drone.mode !== "approach" &&
+        this.drone.mode !== "aiming" &&
+        this.drone.mode !== "firing")
+    ) {
+      return;
+    }
+
+    const activeTargetAgeS = this.missionElapsedS - this.activeTargetAssignedAtS;
+    if (
+      activeTargetAgeS < TARGET_HARD_TIMEOUT_AFTER_S &&
+      this.progressProbe.staleForS < TARGET_STALE_TIMEOUT_AFTER_S
+    ) {
+      return;
+    }
+
+    const targetId = this.drone.activeTargetId;
+    const fallbackReason = `Timed out on target ${targetId}; marking it neutralized to keep the mission moving`;
+    this.neutralizeActiveTargetWithReason(fallbackReason, {
+      targetId,
+      assumedNeutralized: true,
+      targetAgeS: activeTargetAgeS,
+      staleForS: this.progressProbe.staleForS
+    });
+    this.transitionTo("confirming", "engagement timeout fallback", {
+      targetId,
+      targetAgeS: activeTargetAgeS
+    });
   }
 
   private samplePower(): PowerSample {
@@ -1914,6 +1962,8 @@ export class MissionEngine {
       this.drone.mode !== "takeoff" &&
       this.drone.mode !== "searching" &&
       this.drone.mode !== "approach" &&
+      this.drone.mode !== "aiming" &&
+      this.drone.mode !== "firing" &&
       this.drone.mode !== "returning" &&
       this.drone.mode !== "landing"
     ) {
@@ -2013,6 +2063,7 @@ export class MissionEngine {
     }
 
     this.drone.activeTargetId = targetId;
+    this.activeTargetAssignedAtS = targetId === null ? null : this.missionElapsedS;
     this.logEvent(
       "target-selected",
       targetId === null

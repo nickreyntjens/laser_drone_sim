@@ -28,6 +28,7 @@ interface SafetyZonePanelProps {
   onChange: (patch: Partial<SafetyZoneEditorDraft>) => void;
   onApply: () => void;
   onClose: () => void;
+  onBeamDiagramOpen?: () => void;
 }
 
 const INSECT_PRESETS = [
@@ -322,7 +323,8 @@ export function SafetyZonePanel({
   draft,
   onChange,
   onApply,
-  onClose
+  onClose,
+  onBeamDiagramOpen
 }: SafetyZonePanelProps): JSX.Element {
   const [showMath, setShowMath] = useState(false);
   const [showBeamDialog, setShowBeamDialog] = useState(false);
@@ -449,6 +451,7 @@ export function SafetyZonePanel({
               className="beam-diagram-button"
               onClick={() => {
                 setShowBeamDialog(true);
+                onBeamDiagramOpen?.();
                 setHelpText(
                   "Beam diagram opens a full-screen explanation of aperture, focus, farmer position, and nominal safety radius."
                 );

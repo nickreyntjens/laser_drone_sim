@@ -5,9 +5,11 @@ import { OrbitControls } from "@react-three/drei/core/OrbitControls";
 import { Line } from "@react-three/drei/core/Line";
 import { Sky } from "@react-three/drei/core/Sky";
 import * as THREE from "three";
+import { chatterLinesForField } from "../content/farmerChatter";
 import { clamp } from "../sim/defaults";
 import { MissionEngine } from "../sim/engine";
 import { getFieldProfile } from "../sim/fieldProfiles";
+import { distance } from "../sim/math";
 import {
   greenhouseAisleCenters,
   greenhouseColumnCenters,
@@ -28,7 +30,7 @@ import {
 import { FarmerState, FieldType, SimulationSnapshot, TargetState, Vec3 } from "../sim/types";
 import { shouldRenderMarkerForTarget } from "../sim/visuals";
 
-export type CameraMode = "follow" | "overview" | "dock" | "manual";
+export type CameraMode = "follow" | "followSide" | "overview" | "dock" | "manual";
 export interface SafetyEditorPreviewState {
   previewFarmerDistanceM: number;
   nominalSafetyZoneRadiusM: number;
@@ -264,11 +266,11 @@ function SceneCameraRig({
     estimatedDroneLengthM(snapshot.params.droneMassKg),
     snapshot.renderScaleMPerUnit
   );
-  const manualMinDistance = Math.max(followDroneLength * 2.2, 0.45);
-  const manualMaxDistance = Math.max(halfDiagonal * 2.35, 65);
-  const manualPanSpeed = clamp(halfDiagonal / 18, 1.2, 3.2);
-  const manualZoomSpeed = 1.1;
-  const manualRotateSpeed = 0.7;
+  const manualMinDistance = 0.02;
+  const manualMaxDistance = Number.POSITIVE_INFINITY;
+  const manualPanSpeed = clamp(halfDiagonal / 12, 1.8, 4.8);
+  const manualZoomSpeed = 1.3;
+  const manualRotateSpeed = 0.82;
 
   useFrame((_state, delta) => {
     const engine = engineRef.current;
@@ -286,6 +288,19 @@ function SceneCameraRig({
         .copy(dronePoint)
         .add(back.multiplyScalar(followDistance))
         .add(new THREE.Vector3(0, followHeight, lateralOffset));
+    } else if (cameraMode === "followSide") {
+      const heading = engine.drone.headingRad;
+      const side = new THREE.Vector3(-Math.sin(heading), 0, Math.cos(heading));
+      const back = new THREE.Vector3(-Math.cos(heading), 0, -Math.sin(heading));
+      const sideDistance = clamp(followDroneLength * 7.1, 1.18, 2.1);
+      const backDistance = clamp(followDroneLength * 1.9, 0.24, 0.56);
+      const followHeight = clamp(followDroneLength * 3.6, 0.64, 1.02);
+      desiredTarget.current.copy(dronePoint).add(new THREE.Vector3(0, followDroneLength * 0.72, 0));
+      desiredPosition.current
+        .copy(dronePoint)
+        .add(side.multiplyScalar(sideDistance))
+        .add(back.multiplyScalar(backDistance))
+        .add(new THREE.Vector3(0, followHeight, 0));
     } else if (cameraMode === "dock") {
       desiredTarget.current.set(0, 0.5, 0);
       desiredPosition.current.copy(dockPoint).add(new THREE.Vector3(-2.2, 3.1, 6.2));
@@ -326,8 +341,9 @@ function SceneCameraRig({
       zoomSpeed={manualZoomSpeed}
       panSpeed={manualPanSpeed}
       rotateSpeed={manualRotateSpeed}
-      maxPolarAngle={Math.PI * 0.48}
-      minPolarAngle={0.1}
+      zoomToCursor={cameraMode === "manual"}
+      maxPolarAngle={Math.PI * 0.495}
+      minPolarAngle={0.04}
       minDistance={manualMinDistance}
       maxDistance={manualMaxDistance}
       target={[0, 0.4, 0]}
@@ -1053,7 +1069,7 @@ function DockActor({
   ];
 
   return (
-    <group position={[dock.x, dock.y, dock.z]}>
+    <group position={[dock.x, dock.y - padThickness, dock.z]}>
       <mesh receiveShadow castShadow position={[0, 0.04, 0]}>
         <cylinderGeometry args={[padRadius, padRadius * 1.08, padThickness, 32]} />
         <meshStandardMaterial color="#2b3638" metalness={0.45} roughness={0.5} />
@@ -1150,14 +1166,158 @@ function ReferenceActors({ snapshot }: { snapshot: SimulationSnapshot }): JSX.El
   );
 }
 
+function BirdActor({
+  snapshot,
+  cycleOffsetS,
+  perchSeed
+}: {
+  snapshot: SimulationSnapshot;
+  cycleOffsetS: number;
+  perchSeed: number;
+}): JSX.Element | null {
+  const fieldProfile = getFieldProfile(snapshot.params.fieldType);
+  const cycleS = 32;
+  const activeWindowS = 24;
+  const localTimeS = (snapshot.metrics.missionElapsedS + cycleOffsetS) % cycleS;
+  const visible = fieldProfile.cropVisualStyle !== "greenhouse" && localTimeS <= activeWindowS;
+  const cycleIndex = Math.floor((snapshot.metrics.missionElapsedS + cycleOffsetS) / cycleS);
+  const phase = localTimeS < 7 ? "arriving" : localTimeS < 14 ? "perched" : "departing";
+  const sideSign = cycleIndex % 2 === 0 ? 1 : -1;
+  const fieldHalfLengthUnits = snapshot.params.fieldLengthM / snapshot.renderScaleMPerUnit / 2;
+  const fieldHalfWidthUnits = snapshot.params.fieldWidthM / snapshot.renderScaleMPerUnit / 2;
+  const perchPoint = new THREE.Vector3(
+    -fieldHalfLengthUnits + 1.2 + ((cycleIndex + perchSeed) % 4) * 0.8,
+    metersToSceneUnits(fieldProfile.cropVisualStyle === "orchard" ? 2.6 : 0.7, snapshot.renderScaleMPerUnit),
+    sideSign * Math.min(fieldHalfWidthUnits - 0.55, 1.5 + ((cycleIndex + perchSeed) % 3) * 0.55)
+  );
+  const startPoint = perchPoint.clone().add(new THREE.Vector3(-1.2, 1.15, -sideSign * 0.9));
+  const exitPoint = perchPoint.clone().add(new THREE.Vector3(1.7, 1.35, sideSign * 1.05));
+
+  const position = useMemo(() => new THREE.Vector3(), []);
+  const groupRef = useRef<THREE.Group>(null);
+  const leftWingRef = useRef<THREE.Group>(null);
+  const rightWingRef = useRef<THREE.Group>(null);
+  const tailRef = useRef<THREE.Mesh>(null);
+
+  useFrame(({ clock }) => {
+    if (!groupRef.current) {
+      return;
+    }
+
+    groupRef.current.visible = visible;
+    if (!visible) {
+      return;
+    }
+
+    if (phase === "arriving") {
+      const t = clamp(localTimeS / 7, 0, 1);
+      position.lerpVectors(startPoint, perchPoint, t);
+      position.y += Math.sin(t * Math.PI) * 0.22;
+    } else if (phase === "perched") {
+      position.copy(perchPoint);
+      position.y += Math.sin(clock.elapsedTime * 5.6) * 0.01;
+    } else {
+      const t = clamp((localTimeS - 14) / 6, 0, 1);
+      position.lerpVectors(perchPoint, exitPoint, t);
+      position.y += Math.sin(t * Math.PI) * 0.3;
+    }
+
+    groupRef.current.position.copy(position);
+    groupRef.current.rotation.y = phase === "departing" ? -0.8 * sideSign : 2.4 - 0.35 * sideSign;
+
+    const flapStrength = phase === "perched" ? 0.12 : 0.95;
+    const flapRate = phase === "perched" ? 4.5 : 16;
+    const flapAngle = Math.sin(clock.elapsedTime * flapRate + cycleOffsetS * 0.4) * flapStrength;
+    if (leftWingRef.current) {
+      leftWingRef.current.rotation.z = flapAngle + 0.12;
+      leftWingRef.current.rotation.y = 0.16;
+    }
+    if (rightWingRef.current) {
+      rightWingRef.current.rotation.z = -flapAngle - 0.12;
+      rightWingRef.current.rotation.y = -0.16;
+    }
+    if (tailRef.current) {
+      tailRef.current.rotation.y = Math.sin(clock.elapsedTime * 2.3 + perchSeed) * 0.08;
+    }
+  });
+
+  const birdScale = metersToSceneUnits(0.32, snapshot.renderScaleMPerUnit);
+
+  return (
+    <group ref={groupRef} visible={visible}>
+      <mesh castShadow position={[-birdScale * 0.04, birdScale * 0.44, 0]} rotation={[0, 0, Math.PI / 2]}>
+        <capsuleGeometry args={[birdScale * 0.2, birdScale * 0.72, 5, 12]} />
+        <meshStandardMaterial color="#5f6870" roughness={0.82} />
+      </mesh>
+      <mesh castShadow position={[birdScale * 0.5, birdScale * 0.52, 0]} scale={[0.72, 0.58, 0.52]}>
+        <sphereGeometry args={[birdScale * 0.45, 12, 12]} />
+        <meshStandardMaterial color="#909aa2" roughness={0.72} />
+      </mesh>
+      <mesh castShadow position={[birdScale * 0.6, birdScale * 0.54, birdScale * 0.12]} scale={[0.16, 0.14, 0.1]}>
+        <sphereGeometry args={[birdScale * 0.16, 8, 8]} />
+        <meshStandardMaterial color="#12161a" roughness={0.55} />
+      </mesh>
+      <mesh castShadow position={[birdScale * 0.6, birdScale * 0.54, -birdScale * 0.12]} scale={[0.16, 0.14, 0.1]}>
+        <sphereGeometry args={[birdScale * 0.16, 8, 8]} />
+        <meshStandardMaterial color="#12161a" roughness={0.55} />
+      </mesh>
+      <group ref={leftWingRef} position={[-birdScale * 0.06, birdScale * 0.5, birdScale * 0.15]}>
+        <mesh castShadow position={[-birdScale * 0.18, 0, birdScale * 0.2]} rotation={[0.12, 0.08, -0.22]}>
+          <coneGeometry args={[birdScale * 0.22, birdScale * 1.08, 3]} />
+          <meshStandardMaterial color="#5b646c" roughness={0.86} />
+        </mesh>
+      </group>
+      <group ref={rightWingRef} position={[-birdScale * 0.06, birdScale * 0.5, -birdScale * 0.15]}>
+        <mesh castShadow position={[-birdScale * 0.18, 0, -birdScale * 0.2]} rotation={[-0.12, -0.08, 0.22]}>
+          <coneGeometry args={[birdScale * 0.22, birdScale * 1.08, 3]} />
+          <meshStandardMaterial color="#5b646c" roughness={0.86} />
+        </mesh>
+      </group>
+      <mesh
+        ref={tailRef}
+        castShadow
+        position={[-birdScale * 0.86, birdScale * 0.4, 0]}
+        rotation={[0, 0, -Math.PI / 2]}
+      >
+        <coneGeometry args={[birdScale * 0.2, birdScale * 0.42, 3]} />
+        <meshStandardMaterial color="#4f5961" roughness={0.88} />
+      </mesh>
+      <mesh castShadow position={[birdScale * 0.9, birdScale * 0.44, 0]} rotation={[0, 0, Math.PI / 2]}>
+        <coneGeometry args={[birdScale * 0.08, birdScale * 0.24, 8]} />
+        <meshStandardMaterial color="#d59d57" roughness={0.78} />
+      </mesh>
+      <mesh castShadow position={[-birdScale * 0.02, birdScale * 0.18, birdScale * 0.08]} rotation={[0.08, 0, 0]}>
+        <boxGeometry args={[birdScale * 0.05, birdScale * 0.34, birdScale * 0.018]} />
+        <meshStandardMaterial color="#b9803e" roughness={0.86} />
+      </mesh>
+      <mesh castShadow position={[-birdScale * 0.02, birdScale * 0.18, -birdScale * 0.08]} rotation={[-0.08, 0, 0]}>
+        <boxGeometry args={[birdScale * 0.05, birdScale * 0.34, birdScale * 0.018]} />
+        <meshStandardMaterial color="#b9803e" roughness={0.86} />
+      </mesh>
+    </group>
+  );
+}
+
+function Birds({ snapshot }: { snapshot: SimulationSnapshot }): JSX.Element {
+  return (
+    <group>
+      <BirdActor snapshot={snapshot} cycleOffsetS={0} perchSeed={0} />
+      <BirdActor snapshot={snapshot} cycleOffsetS={9} perchSeed={1} />
+      <BirdActor snapshot={snapshot} cycleOffsetS={18} perchSeed={2} />
+    </group>
+  );
+}
+
 function FarmerActor({
   farmer,
   snapshot,
+  chatterLine = null,
   shirtColor = "#506f8d",
   legColor = "#3c464c"
 }: {
   farmer: FarmerState;
   snapshot: SimulationSnapshot;
+  chatterLine?: string | null;
   shirtColor?: string;
   legColor?: string;
 }): JSX.Element {
@@ -1188,15 +1348,58 @@ function FarmerActor({
           <meshStandardMaterial color={legColor} roughness={0.84} />
         </mesh>
       ))}
+      {chatterLine ? (
+        <Html
+          position={[0, farmerHeight * 1.24, 0]}
+          center
+          transform
+          sprite
+          occlude={false}
+          distanceFactor={1.45}
+        >
+          <div className="farmer-chatter-bubble">{chatterLine}</div>
+        </Html>
+      ) : null}
     </group>
   );
 }
 
 function WalkingFarmers({ snapshot }: { snapshot: SimulationSnapshot }): JSX.Element {
+  const activeChatter = useMemo(() => {
+    const nearbyFarmers = snapshot.farmers.filter(
+      (farmer) => distance(farmer.position, snapshot.drone.position) <= 12
+    );
+    if (nearbyFarmers.length === 0) {
+      return { farmerId: null as number | null, line: null as string | null };
+    }
+
+    const chatterCycleBaseS = 14;
+    const cycleIndex = Math.floor(snapshot.metrics.missionElapsedS / chatterCycleBaseS);
+    const cycleJitterS = (sceneNoise(cycleIndex + 0.31, 7.1) - 0.5) * 3.2;
+    const chatterCycleS = chatterCycleBaseS + cycleJitterS;
+    const cycleStartS = cycleIndex * chatterCycleBaseS;
+    const cycleTimeS = snapshot.metrics.missionElapsedS - cycleStartS;
+    const visibleFraction = 0.2 + sceneNoise(cycleIndex + 0.77, 2.4) * 0.06;
+    const chatterVisibleS = Math.max(0.75, chatterCycleS * visibleFraction);
+    if (cycleTimeS > chatterVisibleS) {
+      return { farmerId: null as number | null, line: null as string | null };
+    }
+
+    const speaker = nearbyFarmers[cycleIndex % nearbyFarmers.length];
+    const chatterLines = chatterLinesForField(snapshot.params.fieldType);
+    const line = chatterLines[cycleIndex % chatterLines.length];
+    return { farmerId: speaker?.id ?? null, line };
+  }, [snapshot.drone.position, snapshot.farmers, snapshot.metrics.missionElapsedS, snapshot.params.fieldType]);
+
   return (
     <group>
       {snapshot.farmers.map((farmer) => (
-        <FarmerActor key={farmer.id} farmer={farmer} snapshot={snapshot} />
+        <FarmerActor
+          key={farmer.id}
+          farmer={farmer}
+          snapshot={snapshot}
+          chatterLine={activeChatter.farmerId === farmer.id ? activeChatter.line : null}
+        />
       ))}
     </group>
   );
@@ -1516,6 +1719,7 @@ function SafetyEditorCameraRig({
       rotateSpeed={0.8}
       panSpeed={1.2}
       zoomSpeed={1}
+      zoomToCursor
       minPolarAngle={0.15}
       maxPolarAngle={Math.PI * 0.48}
       minDistance={1.2}
@@ -2300,6 +2504,7 @@ function SceneContents({
       <FieldSurface snapshot={snapshot} />
       <DockActor snapshot={snapshot} charging={snapshot.drone.mode === "charging"} />
       <ReferenceActors snapshot={snapshot} />
+      <Birds snapshot={snapshot} />
       <WalkingFarmers snapshot={snapshot} />
       {safetyEditorPreview ? (
         <SafetyEditorPreview snapshot={snapshot} preview={safetyEditorPreview} />
@@ -2366,7 +2571,7 @@ export function SimulationScene({
       {isExpanded && !controlsHidden && (!isMobileUi || mobileMenuOpen) ? (
         <div className="scene-toolbar">
           <div className="scene-toolbar-copy">
-            <label className="scene-select" data-tutorial-id="playback-control">
+            <label className="scene-select">
               <span className="inline-label">
                 {isMobileUi ? "Speed" : "Playback"}
                 <span
@@ -2395,7 +2600,7 @@ export function SimulationScene({
             {useDenseTargetRendering ? <span className="small-pill">Dense render mode</span> : null}
           </div>
           <div className="camera-switcher">
-            {(["follow", "overview", "dock", "manual"] as CameraMode[]).map((mode) => (
+            {(["follow", "followSide", "overview", "dock", "manual"] as CameraMode[]).map((mode) => (
               <button
                 key={mode}
                 className={cameraMode === mode ? "camera-button active" : "camera-button"}
@@ -2404,11 +2609,18 @@ export function SimulationScene({
                 {isMobileUi
                   ? {
                       follow: "Follow",
+                      followSide: "Side",
                       overview: "Field",
                       dock: "Dock",
                       manual: "Free"
                     }[mode]
-                  : mode}
+                  : {
+                      follow: "follow",
+                      followSide: "side follow",
+                      overview: "overview",
+                      dock: "dock",
+                      manual: "manual"
+                    }[mode]}
               </button>
             ))}
           </div>
@@ -2418,7 +2630,7 @@ export function SimulationScene({
       <Canvas
         shadows
         dpr={canvasDpr}
-        camera={{ position: [8, 7, 9], fov: 42 }}
+        camera={{ position: [8, 7, 9], fov: 42, near: 0.01, far: 200 }}
         gl={{ antialias: !useDenseTargetRendering }}
       >
         <SceneContents

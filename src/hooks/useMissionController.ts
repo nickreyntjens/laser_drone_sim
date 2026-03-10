@@ -15,6 +15,7 @@ interface UseMissionControllerResult {
 const FIELD_POPULATION_INTRO_S = 2.4;
 const SIMULATION_STEP_S = 0.02;
 const MAX_SIM_STEPS_PER_FRAME = 120;
+const MAX_CATCHUP_WALL_TIME_S = SIMULATION_STEP_S * MAX_SIM_STEPS_PER_FRAME;
 
 export function useMissionController(
   params: SimulationParameters,
@@ -64,7 +65,8 @@ export function useMissionController(
     let uiAccumulator = 0;
 
     const tick = (now: number): void => {
-      const dt = Math.min((now - previous) / 1000, 0.05);
+      const rawDt = Math.max((now - previous) / 1000, 0);
+      const dt = Math.min(rawDt, MAX_CATCHUP_WALL_TIME_S);
       previous = now;
       let introElapsed = introElapsedRef.current;
       let introAdvanced = false;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { defaultParameters } from "./defaults";
+import { getFieldProfile } from "./fieldProfiles";
 import { generateTargets } from "./generation";
 import { SimulationParameters } from "./types";
 
@@ -41,5 +42,43 @@ describe("generateTargets", () => {
     const deepFieldCount = targets.filter((target) => target.position.x > params.fieldLengthM * 0.8).length;
 
     expect(nearEdgeCount).toBeGreaterThan(deepFieldCount * 3);
+  });
+
+  it("places rice egg masses near the leaf tips instead of the potato canopy height", () => {
+    const potatoTargets = generateTargets(createParams({ fieldType: "potatoColoradoBeetle" }), 17);
+    const riceProfile = getFieldProfile("riceYellowStemBorerEgg");
+    const riceTargets = generateTargets(
+      createParams({
+        fieldType: "riceYellowStemBorerEgg",
+        rowSpacingM: 0.2
+      }),
+      17
+    );
+
+    const potatoMeanHeight =
+      potatoTargets.reduce((sum, target) => sum + target.position.y, 0) / potatoTargets.length;
+    const riceMeanHeight =
+      riceTargets.reduce((sum, target) => sum + target.position.y, 0) / riceTargets.length;
+
+    expect(riceMeanHeight).toBeGreaterThan(potatoMeanHeight + 0.35);
+    expect(riceTargets.every((target) => target.position.y >= 0.68)).toBe(true);
+    expect(
+      riceTargets.every((target) => {
+        if (!target.supportPosition) {
+          return false;
+        }
+
+        const dx = Math.abs(target.position.x - target.supportPosition.x);
+        const dz = Math.abs(target.position.z - target.supportPosition.z);
+        const dy = target.position.y - target.supportPosition.y;
+        return (
+          dx <= riceProfile.representativeLeafLengthM * 0.48 + 1e-6 &&
+          dz <= riceProfile.representativeLeafLengthM * 0.2 + 1e-6 &&
+          dy >= 0.08 &&
+          dy <= 0.24 &&
+          target.position.y >= riceProfile.maturePlantHeightM * 0.9
+        );
+      })
+    ).toBe(true);
   });
 });

@@ -8,6 +8,7 @@ function createTarget(id: number, x: number, z: number): TargetState {
   return {
     id,
     position: { x, y: 0.22, z },
+    supportPosition: null,
     rowIndex: Math.max(0, Math.round(z / 0.9)),
     alive: true,
     discovered: false,

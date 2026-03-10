@@ -1,4 +1,4 @@
-import { MutableRefObject, useLayoutEffect, useMemo, useRef } from "react";
+import { MutableRefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Html } from "@react-three/drei";
 import { OrbitControls } from "@react-three/drei/core/OrbitControls";
@@ -7,6 +7,7 @@ import { Sky } from "@react-three/drei/core/Sky";
 import * as THREE from "three";
 import { clamp } from "../sim/defaults";
 import { MissionEngine } from "../sim/engine";
+import { getFieldProfile } from "../sim/fieldProfiles";
 import { getBeetleIntroVisualState } from "../sim/intro";
 import {
   estimatedDroneLengthM,
@@ -14,7 +15,7 @@ import {
   nominalDroneModelScale,
   NOMINAL_TARGET_MARKER_HEIGHT_M
 } from "../sim/rendering";
-import { FarmerState, SimulationSnapshot, TargetState, Vec3 } from "../sim/types";
+import { FarmerState, FieldType, SimulationSnapshot, TargetState, Vec3 } from "../sim/types";
 import { shouldRenderMarkerForTarget } from "../sim/visuals";
 
 export type CameraMode = "follow" | "overview" | "dock" | "manual";
@@ -37,6 +38,8 @@ interface SimulationSceneProps {
   playbackSpeed: number;
   playbackSpeedOptions: number[];
   onPlaybackSpeedChange: (value: number) => void;
+  fieldType: FieldType;
+  onFieldTypeChange: (value: FieldType) => void;
   cameraMode: CameraMode;
   onCameraModeChange: (mode: CameraMode) => void;
   safetyEditorPreview: SafetyEditorPreviewState | null;
@@ -74,6 +77,125 @@ function shouldExposeVisualTestState(): boolean {
 function sceneNoise(a: number, b: number): number {
   const value = Math.sin(a * 127.1 + b * 311.7) * 43758.5453123;
   return value - Math.floor(value);
+}
+
+function TargetIcon({ fieldType }: { fieldType: FieldType }): JSX.Element {
+  return fieldType === "potatoColoradoBeetle" ? (
+    <span className="target-icon target-icon-beetle" aria-hidden="true">
+      <span />
+      <span />
+      <span />
+    </span>
+  ) : (
+    <span className="target-icon target-icon-egg" aria-hidden="true">
+      <span />
+      <span />
+      <span />
+    </span>
+  );
+}
+
+function FieldTypeDropdown({
+  fieldType,
+  onChange
+}: {
+  fieldType: FieldType;
+  onChange: (value: FieldType) => void;
+}): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const shellRef = useRef<HTMLDivElement | null>(null);
+  const currentProfile = getFieldProfile(fieldType);
+
+  useEffect(() => {
+    const handlePointerDown = (event: PointerEvent): void => {
+      if (!shellRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+
+    window.addEventListener("pointerdown", handlePointerDown);
+    return () => window.removeEventListener("pointerdown", handlePointerDown);
+  }, []);
+
+  return (
+    <div className="field-type-dropdown" ref={shellRef}>
+      <button
+        type="button"
+        className="field-type-trigger"
+        onClick={() => setOpen((current) => !current)}
+        aria-expanded={open}
+        aria-label="Choose field type"
+      >
+        <TargetIcon fieldType={fieldType} />
+        <span className="field-type-copy">
+          <strong>Field mode</strong>
+          <span>{currentProfile.label}</span>
+        </span>
+        <span className="field-type-chevron" aria-hidden="true">
+          {open ? "\u25b2" : "\u25be"}
+        </span>
+      </button>
+      {open ? (
+        <div className="field-type-menu">
+          {(["potatoColoradoBeetle", "riceYellowStemBorerEgg"] as FieldType[]).map((value) => {
+            const profile = getFieldProfile(value);
+            return (
+              <button
+                key={value}
+                type="button"
+                className={value === fieldType ? "field-type-option active" : "field-type-option"}
+                onClick={() => {
+                  onChange(value);
+                  setOpen(false);
+                }}
+              >
+                <TargetIcon fieldType={value} />
+                <span>
+                  <strong>{profile.cropLabel}</strong>
+                  <span>{profile.targetLabelPlural}</span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function getVisualRowMetrics(snapshot: SimulationSnapshot): {
+  rowCount: number;
+  rowSpacingM: number;
+  alongRowPitchM: number;
+} {
+  const fieldProfile = getFieldProfile(snapshot.params.fieldType);
+  if (fieldProfile.cropVisualStyle === "rice") {
+    // One rendered tuft stands in for multiple real plants so the paddy stays dense
+    // without exploding draw cost on large embedded fields.
+    const representedPlantsPerVisualTuft = 40;
+    const samplingPitchM = clamp(
+      Math.sqrt(representedPlantsPerVisualTuft / fieldProfile.representativePlantDensityPerM2),
+      0.72,
+      0.9
+    );
+    const rowCount = clamp(
+      Math.round(snapshot.params.fieldWidthM / samplingPitchM),
+      40,
+      260
+    );
+    return {
+      rowCount,
+      rowSpacingM: snapshot.params.fieldWidthM / rowCount,
+      alongRowPitchM: samplingPitchM
+    };
+  }
+
+  const rowCount = Math.max(1, Math.round(snapshot.params.fieldWidthM / snapshot.params.rowSpacingM));
+  return {
+    rowCount,
+    rowSpacingM: snapshot.params.rowSpacingM,
+    alongRowPitchM: 3.4
+  };
 }
 
 function SceneCameraRig({
@@ -237,19 +359,20 @@ function CropCanopy({ snapshot }: { snapshot: SimulationSnapshot }): JSX.Element
   const meshRef = useRef<THREE.InstancedMesh>(null);
   const dummy = useMemo(() => new THREE.Object3D(), []);
   const instances = useMemo(() => {
-    const rowCount = Math.max(1, Math.round(snapshot.params.fieldWidthM / snapshot.params.rowSpacingM));
-    const spacingM = 3.4;
+    const fieldProfile = getFieldProfile(snapshot.params.fieldType);
+    const { rowCount, rowSpacingM, alongRowPitchM } = getVisualRowMetrics(snapshot);
+    const spacingM = fieldProfile.cropVisualStyle === "rice" ? alongRowPitchM : 3.4;
     const columns = Math.max(6, Math.floor(snapshot.params.fieldLengthM / spacingM));
     const points: Array<{
       position: [number, number, number];
       scale: [number, number, number];
-      rotationY: number;
+      rotation: [number, number, number];
     }> = [];
 
     for (let row = 0; row < rowCount; row += 1) {
-      const rowZ = row * snapshot.params.rowSpacingM + snapshot.params.rowSpacingM * 0.5;
+      const rowZ = row * rowSpacingM + rowSpacingM * 0.5;
       for (let column = 0; column < columns; column += 1) {
-        const x = 1.7 + column * spacingM;
+        const x = (fieldProfile.cropVisualStyle === "rice" ? 1.4 : 1.7) + column * spacingM;
         if (x > snapshot.params.fieldLengthM - 1.2) {
           continue;
         }
@@ -259,16 +382,32 @@ function CropCanopy({ snapshot }: { snapshot: SimulationSnapshot }): JSX.Element
         const point = toScenePosition(
           {
             x,
-            y: 0.16 + n1 * 0.06,
-            z: rowZ + (n1 - 0.5) * snapshot.params.rowSpacingM * 0.24
+            y:
+              fieldProfile.cropVisualStyle === "rice"
+                ? fieldProfile.maturePlantHeightM * (0.54 + n1 * 0.14)
+                : 0.16 + n1 * 0.06,
+            z:
+              rowZ +
+              (n1 - 0.5) *
+                (fieldProfile.cropVisualStyle === "rice" ? rowSpacingM * 0.16 : rowSpacingM * 0.24)
           },
           snapshot
         );
 
         points.push({
           position: [point.x, point.y, point.z],
-          scale: [0.04 + n1 * 0.035, 0.022 + n2 * 0.02, 0.05 + n2 * 0.04],
-          rotationY: n2 * Math.PI
+          scale:
+            fieldProfile.cropVisualStyle === "rice"
+              ? [
+                  0.005 + n1 * 0.003,
+                  metersToSceneUnits(fieldProfile.maturePlantHeightM * (0.74 + n2 * 0.16), snapshot.renderScaleMPerUnit),
+                  0.018 + n2 * 0.01
+                ]
+              : [0.04 + n1 * 0.035, 0.022 + n2 * 0.02, 0.05 + n2 * 0.04],
+          rotation:
+            fieldProfile.cropVisualStyle === "rice"
+              ? [0, n2 * Math.PI, (n1 - 0.5) * 0.45]
+              : [0, n2 * Math.PI, 0]
         });
       }
     }
@@ -284,7 +423,7 @@ function CropCanopy({ snapshot }: { snapshot: SimulationSnapshot }): JSX.Element
     for (let index = 0; index < instances.length; index += 1) {
       const instance = instances[index];
       dummy.position.set(instance.position[0], instance.position[1], instance.position[2]);
-      dummy.rotation.set(0, instance.rotationY, 0);
+      dummy.rotation.set(instance.rotation[0], instance.rotation[1], instance.rotation[2]);
       dummy.scale.set(instance.scale[0], instance.scale[1], instance.scale[2]);
       dummy.updateMatrix();
       meshRef.current.setMatrixAt(index, dummy.matrix);
@@ -295,8 +434,15 @@ function CropCanopy({ snapshot }: { snapshot: SimulationSnapshot }): JSX.Element
 
   return (
     <instancedMesh ref={meshRef} args={[undefined, undefined, instances.length]} castShadow receiveShadow>
-      <sphereGeometry args={[1, 7, 7]} />
-      <meshStandardMaterial color="#5d8e56" roughness={0.93} />
+      {getFieldProfile(snapshot.params.fieldType).cropVisualStyle === "rice" ? (
+        <boxGeometry args={[1, 1, 1]} />
+      ) : (
+        <sphereGeometry args={[1, 7, 7]} />
+      )}
+      <meshStandardMaterial
+        color={getFieldProfile(snapshot.params.fieldType).cropVisualStyle === "rice" ? "#7bb86a" : "#5d8e56"}
+        roughness={0.93}
+      />
     </instancedMesh>
   );
 }
@@ -304,29 +450,42 @@ function CropCanopy({ snapshot }: { snapshot: SimulationSnapshot }): JSX.Element
 function FieldSurface({ snapshot }: { snapshot: SimulationSnapshot }): JSX.Element {
   const fieldLength = snapshot.params.fieldLengthM / snapshot.renderScaleMPerUnit;
   const fieldWidth = snapshot.params.fieldWidthM / snapshot.renderScaleMPerUnit;
-  const rowCount = Math.max(1, Math.round(snapshot.params.fieldWidthM / snapshot.params.rowSpacingM));
-  const rowWidth = (snapshot.params.rowSpacingM / snapshot.renderScaleMPerUnit) * 0.68;
+  const fieldProfile = getFieldProfile(snapshot.params.fieldType);
+  const { rowCount, rowSpacingM } = getVisualRowMetrics(snapshot);
+  const rowWidth =
+    (rowSpacingM / snapshot.renderScaleMPerUnit) *
+    (fieldProfile.cropVisualStyle === "rice" ? 0.42 : 0.68);
 
   return (
     <group>
       <mesh receiveShadow rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.025, 0]}>
         <planeGeometry args={[fieldLength + 12, fieldWidth + 12]} />
-        <meshStandardMaterial color="#241d18" roughness={1} />
+        <meshStandardMaterial color={fieldProfile.cropVisualStyle === "rice" ? "#1f2e26" : "#241d18"} roughness={1} />
       </mesh>
 
       <mesh receiveShadow rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.004, 0]}>
         <planeGeometry args={[fieldLength + 1, fieldWidth + 1]} />
-        <meshStandardMaterial color="#3b2d23" roughness={1} />
+        <meshStandardMaterial color={fieldProfile.cropVisualStyle === "rice" ? "#3f5a47" : "#3b2d23"} roughness={1} />
       </mesh>
 
+      {fieldProfile.cropVisualStyle === "rice" ? (
+        <mesh receiveShadow rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.002, 0]}>
+          <planeGeometry args={[fieldLength, fieldWidth]} />
+          <meshStandardMaterial color="#355e5d" transparent opacity={0.42} roughness={0.18} metalness={0.08} />
+        </mesh>
+      ) : null}
+
       {Array.from({ length: rowCount }).map((_, rowIndex) => {
-        const rowCenter = rowIndex * snapshot.params.rowSpacingM + snapshot.params.rowSpacingM * 0.5;
+        const rowCenter = rowIndex * rowSpacingM + rowSpacingM * 0.5;
         const sceneRow = toScenePosition({ x: snapshot.params.fieldLengthM * 0.5, y: 0.05, z: rowCenter }, snapshot);
 
         return (
           <mesh key={rowIndex} position={[0, 0.01, sceneRow.z]} receiveShadow>
             <boxGeometry args={[fieldLength, 0.025, rowWidth]} />
-            <meshStandardMaterial color="#6e5735" roughness={0.96} />
+            <meshStandardMaterial
+              color={fieldProfile.cropVisualStyle === "rice" ? "#61895f" : "#6e5735"}
+              roughness={0.96}
+            />
           </mesh>
         );
       })}
@@ -1091,6 +1250,7 @@ function DenseBeetleCloud({
   excludedTargetIds: Set<number>;
 }): JSX.Element | null {
   const payload = useMemo(() => {
+    const fieldProfile = getFieldProfile(snapshot.params.fieldType);
     const fieldAreaHectares = (snapshot.params.fieldLengthM * snapshot.params.fieldWidthM) / 10_000;
     const visibilityBoost = clamp(Math.sqrt(fieldAreaHectares), 1, 3.2);
     const aliveTargets = snapshot.targets.filter(
@@ -1108,10 +1268,14 @@ function DenseBeetleCloud({
 
     const positions = new Float32Array(aliveTargets.length * 3);
     const colors = new Float32Array(aliveTargets.length * 3);
-    const knownColor = new THREE.Color("#ffd48d");
-    const seededColor = new THREE.Color("#e0ae66");
+    const knownColor = new THREE.Color(fieldProfile.denseKnownColor);
+    const seededColor = new THREE.Color(fieldProfile.denseSeededColor);
     const beaconLift = 0.035 * visibilityBoost;
-    const pointSize = clamp(4.8 + visibilityBoost * 1.6, 4.8, 9.2);
+    const pointSize = clamp(
+      (fieldProfile.targetVisualStyle === "eggMass" ? 4.4 : 4.8) + visibilityBoost * 1.6,
+      4.4,
+      9.2
+    );
 
     for (let index = 0; index < aliveTargets.length; index += 1) {
       const target = aliveTargets[index];
@@ -1169,6 +1333,7 @@ function BeetleMarker({
   active: boolean;
   introProgress: number;
 }): JSX.Element {
+  const fieldProfile = getFieldProfile(snapshot.params.fieldType);
   const point = toScenePosition(target.position, snapshot);
   const introState = getBeetleIntroVisualState(target, introProgress);
   const fieldAreaHectares = (snapshot.params.fieldLengthM * snapshot.params.fieldWidthM) / 10_000;
@@ -1183,10 +1348,12 @@ function BeetleMarker({
       : 0.84
     : Math.max(0.12, target.neutralizationPulse * 0.6);
   const animatedOpacity = opacity * introState.opacityFactor;
-  const color = target.alive ? (target.discovered ? "#ffd178" : "#e0ae66") : "#666963";
+  const color = target.alive
+    ? (target.discovered ? fieldProfile.targetAliveColor : fieldProfile.targetSeededColor)
+    : fieldProfile.targetNeutralizedColor;
   const shadowScale =
     scale * (1.1 + (1 - introState.settleProgress) * 0.55);
-  const haloColor = active ? "#ff8a61" : target.discovered ? "#ffd48d" : "#f0bd74";
+  const haloColor = active ? "#ff8a61" : fieldProfile.targetHaloColor;
   const haloOpacity = animatedOpacity * (active ? 0.95 : target.discovered ? 0.82 : 0.74);
   const markerBoost = clamp(0.64 + visibilityBoost * 0.28, 0.92, 1.55);
   const beaconHeight = metersToSceneUnits(
@@ -1207,6 +1374,27 @@ function BeetleMarker({
   const groundOuterRadius = metersToSceneUnits((active ? 0.09 : 0.07) * markerBoost, snapshot.renderScaleMPerUnit);
   const activeOuterInnerRadius = metersToSceneUnits(0.14 * markerBoost, snapshot.renderScaleMPerUnit);
   const activeOuterOuterRadius = metersToSceneUnits(0.19 * markerBoost, snapshot.renderScaleMPerUnit);
+  const riceLeafLengthUnits = metersToSceneUnits(
+    fieldProfile.representativeLeafLengthM * 0.72,
+    snapshot.renderScaleMPerUnit
+  );
+  const leafSupportOffset =
+    fieldProfile.targetVisualStyle === "eggMass" && target.supportPosition
+      ? [
+          metersToSceneUnits(
+            target.supportPosition.x - target.position.x,
+            snapshot.renderScaleMPerUnit
+          ),
+          metersToSceneUnits(
+            target.supportPosition.y - target.position.y,
+            snapshot.renderScaleMPerUnit
+          ),
+          metersToSceneUnits(
+            target.supportPosition.z - target.position.z,
+            snapshot.renderScaleMPerUnit
+          )
+        ]
+      : null;
   const showMarker = shouldRenderMarkerForTarget(
     target,
     active,
@@ -1233,24 +1421,78 @@ function BeetleMarker({
           depthWrite={false}
         />
       </mesh>
-      <mesh
-        castShadow
-        scale={[
-          scale * 0.8,
-          scale * 0.56 * introState.landingSquash,
-          scale
-        ]}
-      >
-        <sphereGeometry args={[1, 12, 12]} />
-        <meshStandardMaterial
-          color={color}
-          emissive={target.alive ? haloColor : "#1d201d"}
-          emissiveIntensity={target.alive ? 0.24 : 0.08}
-          transparent
-          opacity={animatedOpacity}
-          roughness={0.46}
-        />
-      </mesh>
+      {fieldProfile.targetVisualStyle === "eggMass" ? (
+        <>
+          {leafSupportOffset ? (
+            <>
+              <Line
+                points={[
+                  [leafSupportOffset[0], leafSupportOffset[1], leafSupportOffset[2]],
+                  [0, 0, 0]
+                ]}
+                color="#96d985"
+                lineWidth={2.2}
+                transparent
+                opacity={0.96}
+              />
+              <mesh
+                position={[
+                  leafSupportOffset[0] * 0.55,
+                  leafSupportOffset[1] * 0.55,
+                  leafSupportOffset[2] * 0.55
+                ]}
+                rotation={[0, Math.atan2(leafSupportOffset[2], leafSupportOffset[0]), -0.22]}
+              >
+                <boxGeometry args={[
+                  riceLeafLengthUnits * 0.52,
+                  metersToSceneUnits(0.01, snapshot.renderScaleMPerUnit),
+                  metersToSceneUnits(0.045, snapshot.renderScaleMPerUnit)
+                ]} />
+                <meshStandardMaterial color="#83c973" roughness={0.72} transparent opacity={0.82} />
+              </mesh>
+            </>
+          ) : null}
+          <group scale={[scale * 0.68, scale * 0.68 * introState.landingSquash, scale * 0.68]}>
+          {[
+            [-0.22, 0.04, 0],
+            [0, 0.14, 0.08],
+            [0.22, 0.02, -0.06],
+            [0.08, -0.08, -0.14]
+          ].map((offset, index) => (
+            <mesh key={index} castShadow position={offset as [number, number, number]}>
+              <sphereGeometry args={[0.34, 10, 10]} />
+              <meshStandardMaterial
+                color={color}
+                emissive={target.alive ? haloColor : "#1d201d"}
+                emissiveIntensity={target.alive ? 0.18 : 0.06}
+                transparent
+                opacity={animatedOpacity}
+                roughness={0.5}
+              />
+            </mesh>
+          ))}
+          </group>
+        </>
+      ) : (
+        <mesh
+          castShadow
+          scale={[
+            scale * 0.8,
+            scale * 0.56 * introState.landingSquash,
+            scale
+          ]}
+        >
+          <sphereGeometry args={[1, 12, 12]} />
+          <meshStandardMaterial
+            color={color}
+            emissive={target.alive ? haloColor : "#1d201d"}
+            emissiveIntensity={target.alive ? 0.24 : 0.08}
+            transparent
+            opacity={animatedOpacity}
+            roughness={0.46}
+          />
+        </mesh>
+      )}
       {showMarker ? (
         <>
           {/* Marker beacon is deliberately non-physical; it can be hidden for non-selected targets to reduce clutter. */}
@@ -1497,6 +1739,8 @@ export function SimulationScene({
   playbackSpeed,
   playbackSpeedOptions,
   onPlaybackSpeedChange,
+  fieldType,
+  onFieldTypeChange,
   cameraMode,
   onCameraModeChange,
   safetyEditorPreview
@@ -1510,6 +1754,11 @@ export function SimulationScene({
 
   return (
     <div className="scene-shell">
+      {!controlsHidden && !safetyEditorPreview ? (
+        <div className="scene-field-type-anchor">
+          <FieldTypeDropdown fieldType={fieldType} onChange={onFieldTypeChange} />
+        </div>
+      ) : null}
       {isExpanded && !controlsHidden && (!isMobileUi || mobileMenuOpen) ? (
         <div className="scene-toolbar">
           <div className="scene-toolbar-copy">

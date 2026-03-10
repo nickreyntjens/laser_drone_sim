@@ -1,6 +1,75 @@
 import { clamp } from "./defaults";
+import { FieldProfile, getFieldProfile } from "./fieldProfiles";
 import { createRng, samplePoisson, vec3 } from "./math";
 import { SimulationParameters, TargetState, Vec3 } from "./types";
+
+function snapToGrid(value: number, spacingM: number, minM: number, maxM: number): number {
+  const snappedValue = Math.round(value / spacingM) * spacingM;
+  return clamp(snappedValue, minM, maxM);
+}
+
+export interface RiceLeafTipPlacement {
+  hillX: number;
+  hillZ: number;
+  supportX: number;
+  supportY: number;
+  supportZ: number;
+  tipX: number;
+  tipZ: number;
+  tipHeightM: number;
+  leafTipAngleRad: number;
+}
+
+export function computeRiceLeafTipPlacement(
+  baseX: number,
+  baseZ: number,
+  params: SimulationParameters,
+  fieldProfile: FieldProfile,
+  rng: () => number
+): RiceLeafTipPlacement {
+  const hillX = snapToGrid(baseX, params.rowSpacingM, 0.3, params.fieldLengthM - 0.3);
+  const hillZ = snapToGrid(baseZ, params.rowSpacingM, 0.15, params.fieldWidthM - 0.15);
+  const leafTipAngleRad = rng() * Math.PI * 2;
+  const tipReachM =
+    fieldProfile.representativeLeafLengthM * (0.72 + rng() * 0.18);
+  const supportReachRatio = 0.18 + rng() * 0.08;
+  const supportX = clamp(
+    hillX + Math.cos(leafTipAngleRad) * tipReachM * supportReachRatio,
+    0.3,
+    params.fieldLengthM - 0.3
+  );
+  const supportZ = clamp(
+    hillZ + Math.sin(leafTipAngleRad) * tipReachM * supportReachRatio * 0.45,
+    0.15,
+    params.fieldWidthM - 0.15
+  );
+  const tipX = clamp(
+    hillX + Math.cos(leafTipAngleRad) * tipReachM * 0.58,
+    0.3,
+    params.fieldLengthM - 0.3
+  );
+  const tipZ = clamp(
+    hillZ + Math.sin(leafTipAngleRad) * tipReachM * 0.26,
+    0.15,
+    params.fieldWidthM - 0.15
+  );
+  const supportY =
+    fieldProfile.maturePlantHeightM * (0.74 + rng() * 0.06);
+  const tipHeightM =
+    fieldProfile.maturePlantHeightM * (0.92 + rng() * 0.04);
+
+  return {
+    hillX,
+    hillZ,
+    supportX,
+    supportY,
+    supportZ,
+    tipX,
+    tipZ,
+    tipHeightM,
+    leafTipAngleRad
+  };
+}
 
 export function buildSweepPath(params: SimulationParameters): Vec3[] {
   const laneCenters: number[] = [];
@@ -29,6 +98,7 @@ export function generateTargets(
   seed: number
 ): TargetState[] {
   const rng = createRng(seed);
+  const fieldProfile = getFieldProfile(params.fieldType);
   const fieldArea = params.fieldLengthM * params.fieldWidthM;
   const fieldAreaHectares = fieldArea / 10_000;
   const targetCountMean = params.edgeDensityPerHectare * fieldAreaHectares;
@@ -52,16 +122,31 @@ export function generateTargets(
       rowCount - 1
     );
     const rowCenter = rowIndex * params.rowSpacingM + params.rowSpacingM * 0.5;
-    const canopyOffset = (rng() - 0.5) * params.rowSpacingM * 0.35;
-    const alongRowJitter = (rng() - 0.5) * 0.7;
+    const canopyOffset = (rng() - 0.5) * params.rowSpacingM * fieldProfile.canopyOffsetFactor;
+    const alongRowJitter = (rng() - 0.5) * fieldProfile.alongRowJitterM;
+    const isRice = fieldProfile.cropVisualStyle === "rice";
+    const baseX = clamp(x + alongRowJitter, 0.4, params.fieldLengthM - 0.4);
+    const baseZ = clamp(rowCenter + canopyOffset, 0.2, params.fieldWidthM - 0.2);
+    const ricePlacement = isRice
+      ? computeRiceLeafTipPlacement(baseX, baseZ, params, fieldProfile, rng)
+      : null;
+    const tipX = ricePlacement ? ricePlacement.tipX : baseX;
+    const tipZ = ricePlacement ? ricePlacement.tipZ : baseZ;
+    const targetHeightM = ricePlacement
+      ? ricePlacement.tipHeightM
+      : fieldProfile.targetHeightBaseM + rng() * fieldProfile.targetHeightJitterM;
+    const supportPosition = ricePlacement
+      ? vec3(ricePlacement.supportX, ricePlacement.supportY, ricePlacement.supportZ)
+      : null;
 
     accepted.push({
       id: accepted.length,
       position: vec3(
-        clamp(x + alongRowJitter, 0.4, params.fieldLengthM - 0.4),
-        0.18 + rng() * 0.12,
-        clamp(rowCenter + canopyOffset, 0.2, params.fieldWidthM - 0.2)
+        tipX,
+        targetHeightM,
+        tipZ
       ),
+      supportPosition,
       rowIndex,
       alive: true,
       discovered: false,

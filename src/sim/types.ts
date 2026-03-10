@@ -18,10 +18,12 @@ export type DroneMode =
   | "complete";
 
 export type TargetingMode = "search" | "preSurveyed";
+export type FieldType = "potatoColoradoBeetle" | "riceYellowStemBorerEgg";
 
 export interface SimulationParameters {
   fieldLengthM: number;
   fieldWidthM: number;
+  fieldType: FieldType;
   targetingMode: TargetingMode;
   showOnlySelectedTargetMarkers: boolean;
   edgeDensityPerHectare: number;
@@ -65,6 +67,7 @@ export interface EnergyBreakdown {
 export interface TargetState {
   id: number;
   position: Vec3;
+  supportPosition: Vec3 | null;
   rowIndex: number;
   alive: boolean;
   discovered: boolean;

@@ -83,6 +83,7 @@ function cloneTarget(source: TargetState, id: number): TargetState {
     ...source,
     id,
     position: cloneVec3(source.position),
+    supportPosition: source.supportPosition ? cloneVec3(source.supportPosition) : null,
     blockedUntilS: source.blockedUntilS ?? 0
   };
 }

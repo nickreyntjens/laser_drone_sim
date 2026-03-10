@@ -18,7 +18,7 @@ import {
 import { GuideLineDefinitionId } from "../content/guideCatalog";
 import { SimulationSnapshot, SimulationParameters } from "../sim/types";
 
-const GUIDE_SENTENCE_GAP_MS = 1400;
+const GUIDE_SENTENCE_GAP_MS = 7000;
 const GUIDE_DISABLED_LINES_STORAGE_KEY = "photonic-laser-drone-sim.disabledGuideLines";
 
 interface GuideQueueItem {

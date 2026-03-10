@@ -18,6 +18,7 @@ import { useMissionController } from "./hooks/useMissionController";
 import { useMissionGuide } from "./hooks/useMissionGuide";
 import { useResponsiveUi } from "./hooks/useResponsiveUi";
 import { formatDuration } from "./lib/format";
+import { fieldReferenceImageFor } from "./content/fieldReferenceImages";
 import { buildBeamDiagramIntroLines } from "./content/guideScript";
 import {
   DEFAULT_SEED,
@@ -172,6 +173,8 @@ export default function App(): JSX.Element {
   const [showBuildToast, setShowBuildToast] = useState(false);
   const [showMissionCompleteToast, setShowMissionCompleteToast] = useState(false);
   const [farmerSafetyToast, setFarmerSafetyToast] = useState<FarmerSafetyToast | null>(null);
+  const [fieldReferenceVisible, setFieldReferenceVisible] = useState(false);
+  const [pendingFieldReferenceFieldType, setPendingFieldReferenceFieldType] = useState<FieldType | null>(null);
   const [suppressFarmerSafetyToast, setSuppressFarmerSafetyToast] = useState(false);
   const [safetyEditorDraft, setSafetyEditorDraft] = useState<SafetyZoneEditorDraft | null>(
     runtimeConfig.startSafetyEditor ? createSafetyEditorDraft(initialParams) : null
@@ -179,6 +182,8 @@ export default function App(): JSX.Element {
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
   const watchSecondsRef = useRef(0);
   const buildToastTriggeredRef = useRef(false);
+  const fieldReferenceShownForRef = useRef<FieldType | null>(null);
+  const fieldReferenceTimerRef = useRef<number | null>(null);
   const previousSummaryRef = useRef(false);
   const safetyEditorResumeRef = useRef(false);
   const suppressFarmerSafetyToastRef = useRef(false);
@@ -272,6 +277,7 @@ export default function App(): JSX.Element {
       onToggleFarmerSelection: () => undefined
     };
   }, [safetyEditorDraft]);
+  const activeFieldReference = fieldReferenceVisible ? fieldReferenceImageFor(activeParams.fieldType) : null;
 
   const setViewportExpanded = (nextValue: boolean, syncParent = false): void => {
     setIsExpanded(nextValue);
@@ -437,6 +443,74 @@ export default function App(): JSX.Element {
         }}
       />
     ) : null;
+
+  useEffect(() => {
+    fieldReferenceShownForRef.current = null;
+    setFieldReferenceVisible(false);
+    setPendingFieldReferenceFieldType(null);
+    if (fieldReferenceTimerRef.current !== null && typeof window !== "undefined") {
+      window.clearTimeout(fieldReferenceTimerRef.current);
+      fieldReferenceTimerRef.current = null;
+    }
+  }, [activeParams.fieldType]);
+
+  useEffect(() => {
+    if (
+      isIntroActive ||
+      safetyEditorActive ||
+      fieldReferenceVisible ||
+      fieldReferenceShownForRef.current === activeParams.fieldType ||
+      snapshot.metrics.missionElapsedS < 16
+    ) {
+      return;
+    }
+
+    fieldReferenceShownForRef.current = activeParams.fieldType;
+    setPendingFieldReferenceFieldType(activeParams.fieldType);
+    announce(
+      "real-image-context",
+      fieldReferenceImageFor(activeParams.fieldType).guideLine,
+      () => !safetyEditorActive
+    );
+  }, [
+    activeParams.fieldType,
+    announce,
+    fieldReferenceVisible,
+    isIntroActive,
+    safetyEditorActive,
+    snapshot.metrics.missionElapsedS
+  ]);
+
+  useEffect(() => {
+    if (
+      pendingFieldReferenceFieldType === null ||
+      currentDefinitionId !== "real-image-context" ||
+      fieldReferenceVisible
+    ) {
+      return;
+    }
+
+    setFieldReferenceVisible(true);
+    setPendingFieldReferenceFieldType(null);
+    if (typeof window !== "undefined") {
+      fieldReferenceTimerRef.current = window.setTimeout(() => {
+        setFieldReferenceVisible(false);
+        fieldReferenceTimerRef.current = null;
+      }, 10_000);
+    }
+  }, [
+    currentDefinitionId,
+    fieldReferenceVisible,
+    pendingFieldReferenceFieldType
+  ]);
+
+  useEffect(() => {
+    return () => {
+      if (fieldReferenceTimerRef.current !== null && typeof window !== "undefined") {
+        window.clearTimeout(fieldReferenceTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!runtimeConfig.startSafetyEditor || safetyEditorDraft || activeOverlay === "safetyZone") {
@@ -829,6 +903,22 @@ export default function App(): JSX.Element {
                 </div>
             )}
           </div>
+          ) : null}
+
+          {activeFieldReference && !safetyEditorActive ? (
+            <div className="scene-reference-card">
+              <img
+                className="scene-reference-card-image"
+                src={activeFieldReference.imageUrl}
+                alt={activeFieldReference.title}
+              />
+              <div className="scene-reference-card-body">
+                <span className="eyebrow">Real image context</span>
+                <strong>{activeFieldReference.title}</strong>
+                <p>{activeFieldReference.caption}</p>
+                <span className="scene-reference-card-source">{activeFieldReference.sourceLabel}</span>
+              </div>
+            </div>
           ) : null}
 
           {overlayContent ? (

@@ -20,6 +20,7 @@ export type GuideLineDefinitionId =
   | "mission-complete"
   | "playback-reminder"
   | "field-modes-reminder"
+  | "real-image-context"
   | "safety-hold"
   | "nsz-ring"
   | "nsz-edit"
@@ -66,6 +67,7 @@ export const GUIDE_LINE_DEFINITIONS: GuideLineDefinition[] = [
   { id: "mission-complete", category: "events", title: "Mission complete" },
   { id: "playback-reminder", category: "events", title: "Playback speed reminder" },
   { id: "field-modes-reminder", category: "visualContext", title: "Field mode selector reminder" },
+  { id: "real-image-context", category: "visualContext", title: "Real image context card" },
   { id: "safety-hold", category: "events", title: "Farmer safety hold" },
   { id: "nsz-ring", category: "visualContext", title: "NSZ ring meaning" },
   { id: "nsz-edit", category: "safetyEditor", title: "NSZ can be reconfigured" },

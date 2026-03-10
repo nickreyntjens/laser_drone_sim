@@ -90,6 +90,7 @@ export interface FarmerState {
   headingRad: number;
   heightM: number;
   shoulderWidthM: number;
+  gender: "male" | "female";
 }
 
 export interface MissionLogEvent {

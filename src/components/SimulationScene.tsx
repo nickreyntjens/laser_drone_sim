@@ -1,13 +1,14 @@
 import { MutableRefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Html } from "@react-three/drei";
+import { Text } from "@react-three/drei/core/Text";
 import { OrbitControls } from "@react-three/drei/core/OrbitControls";
 import { Line } from "@react-three/drei/core/Line";
 import { Sky } from "@react-three/drei/core/Sky";
 import * as THREE from "three";
-import { chatterLinesForField } from "../content/farmerChatter";
 import { clamp } from "../sim/defaults";
 import { MissionEngine } from "../sim/engine";
+import { activeFarmerChatterState, activeFarmerDinnerState, activeFarmerPlacardState } from "../sim/farmers";
 import { getFieldProfile } from "../sim/fieldProfiles";
 import { distance } from "../sim/math";
 import {
@@ -271,6 +272,13 @@ function SceneCameraRig({
   const manualPanSpeed = clamp(halfDiagonal / 12, 1.8, 4.8);
   const manualZoomSpeed = 1.3;
   const manualRotateSpeed = 0.82;
+  const hasActiveFarmerChatter =
+    activeFarmerChatterState(
+      snapshot.farmers as any,
+      snapshot.params.fieldType,
+      snapshot.drone.position,
+      snapshot.metrics.missionElapsedS
+    ).farmerId !== null;
 
   useFrame((_state, delta) => {
     const engine = engineRef.current;
@@ -316,7 +324,7 @@ function SceneCameraRig({
     }
 
     if (cameraMode !== "manual") {
-      const easing = 1 - Math.exp(-delta * 2.3);
+      const easing = 1 - Math.exp(-delta * (hasActiveFarmerChatter ? 0.18 : 2.3));
       camera.position.lerp(desiredPosition.current, easing);
       if (controlsRef.current) {
         controlsRef.current.target.lerp(desiredTarget.current, easing);
@@ -336,11 +344,11 @@ function SceneCameraRig({
       enableRotate
       enableZoom
       enableDamping
-      dampingFactor={0.08}
+      dampingFactor={hasActiveFarmerChatter ? 0.26 : 0.08}
       screenSpacePanning
-      zoomSpeed={manualZoomSpeed}
-      panSpeed={manualPanSpeed}
-      rotateSpeed={manualRotateSpeed}
+      zoomSpeed={hasActiveFarmerChatter ? manualZoomSpeed * 0.13 : manualZoomSpeed}
+      panSpeed={hasActiveFarmerChatter ? manualPanSpeed * 0.14 : manualPanSpeed}
+      rotateSpeed={hasActiveFarmerChatter ? manualRotateSpeed * 0.15 : manualRotateSpeed}
       zoomToCursor={cameraMode === "manual"}
       maxPolarAngle={Math.PI * 0.495}
       minPolarAngle={0.04}
@@ -1312,18 +1320,51 @@ function FarmerActor({
   farmer,
   snapshot,
   chatterLine = null,
-  shirtColor = "#506f8d",
-  legColor = "#3c464c"
+  placardLabel = null,
+  shirtColor = farmer.gender === "female" ? "#8c4f72" : "#506f8d",
+  legColor = farmer.gender === "female" ? "#4f3e54" : "#3c464c"
 }: {
   farmer: FarmerState;
   snapshot: SimulationSnapshot;
   chatterLine?: string | null;
+  placardLabel?: string | null;
   shirtColor?: string;
   legColor?: string;
 }): JSX.Element {
   const point = toScenePosition(farmer.position, snapshot);
   const farmerHeight = metersToSceneUnits(farmer.heightM, snapshot.renderScaleMPerUnit);
   const farmerShoulderWidth = metersToSceneUnits(farmer.shoulderWidthM, snapshot.renderScaleMPerUnit);
+  const { camera, size } = useThree();
+  const [showChatter, setShowChatter] = useState(false);
+  const showChatterRef = useRef(false);
+
+  useFrame(() => {
+    if (!chatterLine) {
+      if (showChatterRef.current) {
+        showChatterRef.current = false;
+        setShowChatter(false);
+      }
+      return;
+    }
+
+    const bubbleAnchor = new THREE.Vector3(point.x, point.y + farmerHeight * 1.24, point.z).project(camera);
+    const screenX = ((bubbleAnchor.x + 1) * 0.5) * size.width;
+    const screenY = ((1 - bubbleAnchor.y) * 0.5) * size.height;
+    const bubbleHalfWidthPx = 72;
+    const bubbleHalfHeightPx = 64;
+    const fullyVisible =
+      bubbleAnchor.z >= -1 &&
+      bubbleAnchor.z <= 1 &&
+      screenX >= bubbleHalfWidthPx + 10 &&
+      screenX <= size.width - bubbleHalfWidthPx - 10 &&
+      screenY >= bubbleHalfHeightPx + 10 &&
+      screenY <= size.height - bubbleHalfHeightPx - 10;
+
+    if (fullyVisible !== showChatterRef.current) {
+      showChatterRef.current = fullyVisible;
+      setShowChatter(fullyVisible);
+    }
+  });
 
   return (
     <group position={[point.x, point.y, point.z]} rotation={[0, -farmer.headingRad + Math.PI * 0.5, 0]}>
@@ -1342,13 +1383,49 @@ function FarmerActor({
         <sphereGeometry args={[farmerHeight * 0.09, 12, 12]} />
         <meshStandardMaterial color="#d0b191" roughness={0.92} />
       </mesh>
+      {farmer.gender === "female" ? (
+        <mesh castShadow position={[0, farmerHeight * 0.9, -farmerShoulderWidth * 0.05]}>
+          <sphereGeometry args={[farmerHeight * 0.05, 10, 10]} />
+          <meshStandardMaterial color="#4a3224" roughness={0.9} />
+        </mesh>
+      ) : (
+        <mesh castShadow position={[0, farmerHeight * 0.9, 0]}>
+          <sphereGeometry args={[farmerHeight * 0.1, 12, 12, 0, Math.PI * 2, 0, Math.PI * 0.55]} />
+          <meshStandardMaterial color="#5a4331" roughness={0.88} />
+        </mesh>
+      )}
       {[-1, 1].map((side) => (
         <mesh key={side} castShadow position={[farmerShoulderWidth * 0.12 * side, farmerHeight * 0.2, 0]}>
           <cylinderGeometry args={[farmerShoulderWidth * 0.06, farmerShoulderWidth * 0.07, farmerHeight * 0.42, 10]} />
           <meshStandardMaterial color={legColor} roughness={0.84} />
         </mesh>
       ))}
-      {chatterLine ? (
+      {placardLabel ? (
+        <group position={[farmerShoulderWidth * 0.78, farmerHeight * 0.72, farmerShoulderWidth * 0.26]} rotation={[0, 0, -0.18]}>
+          <mesh castShadow position={[0, -farmerHeight * 0.18, 0]}>
+            <cylinderGeometry
+              args={[farmerShoulderWidth * 0.035, farmerShoulderWidth * 0.035, farmerHeight * 0.92, 10]}
+            />
+            <meshStandardMaterial color="#b89254" roughness={0.88} />
+          </mesh>
+          <mesh castShadow position={[0, farmerHeight * 0.14, 0]}>
+            <boxGeometry args={[farmerHeight * 0.82, farmerHeight * 0.36, farmerShoulderWidth * 0.06]} />
+            <meshStandardMaterial color="#e9e2cf" roughness={0.92} />
+          </mesh>
+          <Text
+            position={[0, farmerHeight * 0.14, farmerShoulderWidth * 0.034]}
+            fontSize={farmerHeight * 0.085}
+            maxWidth={farmerHeight * 0.68}
+            textAlign="center"
+            anchorX="center"
+            anchorY="middle"
+            color="#1e2421"
+          >
+            {placardLabel}
+          </Text>
+        </group>
+      ) : null}
+      {chatterLine && showChatter ? (
         <Html
           position={[0, farmerHeight * 1.24, 0]}
           center
@@ -1365,31 +1442,24 @@ function FarmerActor({
 }
 
 function WalkingFarmers({ snapshot }: { snapshot: SimulationSnapshot }): JSX.Element {
-  const activeChatter = useMemo(() => {
-    const nearbyFarmers = snapshot.farmers.filter(
-      (farmer) => distance(farmer.position, snapshot.drone.position) <= 12
-    );
-    if (nearbyFarmers.length === 0) {
-      return { farmerId: null as number | null, line: null as string | null };
-    }
-
-    const chatterCycleBaseS = 14;
-    const cycleIndex = Math.floor(snapshot.metrics.missionElapsedS / chatterCycleBaseS);
-    const cycleJitterS = (sceneNoise(cycleIndex + 0.31, 7.1) - 0.5) * 3.2;
-    const chatterCycleS = chatterCycleBaseS + cycleJitterS;
-    const cycleStartS = cycleIndex * chatterCycleBaseS;
-    const cycleTimeS = snapshot.metrics.missionElapsedS - cycleStartS;
-    const visibleFraction = 0.2 + sceneNoise(cycleIndex + 0.77, 2.4) * 0.06;
-    const chatterVisibleS = Math.max(0.75, chatterCycleS * visibleFraction);
-    if (cycleTimeS > chatterVisibleS) {
-      return { farmerId: null as number | null, line: null as string | null };
-    }
-
-    const speaker = nearbyFarmers[cycleIndex % nearbyFarmers.length];
-    const chatterLines = chatterLinesForField(snapshot.params.fieldType);
-    const line = chatterLines[cycleIndex % chatterLines.length];
-    return { farmerId: speaker?.id ?? null, line };
-  }, [snapshot.drone.position, snapshot.farmers, snapshot.metrics.missionElapsedS, snapshot.params.fieldType]);
+  const activeChatter = useMemo(
+    () =>
+      activeFarmerChatterState(
+        snapshot.farmers as any,
+        snapshot.params.fieldType,
+        snapshot.drone.position,
+        snapshot.metrics.missionElapsedS
+      ),
+    [snapshot]
+  );
+  const activePlacard = useMemo(
+    () => activeFarmerPlacardState(snapshot.farmers as any, snapshot.drone.position, snapshot.metrics.missionElapsedS),
+    [snapshot]
+  );
+  const activeDinner = useMemo(
+    () => activeFarmerDinnerState(snapshot.farmers as any, snapshot.drone.position, snapshot.metrics.missionElapsedS),
+    [snapshot]
+  );
 
   return (
     <group>
@@ -1398,7 +1468,24 @@ function WalkingFarmers({ snapshot }: { snapshot: SimulationSnapshot }): JSX.Ele
           key={farmer.id}
           farmer={farmer}
           snapshot={snapshot}
-          chatterLine={activeChatter.farmerId === farmer.id ? activeChatter.line : null}
+          chatterLine={
+            activeDinner.callerId === farmer.id
+              ? activeDinner.callerLine
+              : activeDinner.responderId === farmer.id
+                ? activeDinner.responderLine
+                : activePlacard.farmerId === farmer.id
+              ? null
+                : activeChatter.farmerId === farmer.id
+                  ? activeChatter.line
+                  : null
+          }
+          placardLabel={
+            activeDinner.callerId === farmer.id || activeDinner.responderId === farmer.id
+              ? null
+              : activePlacard.farmerId === farmer.id
+                ? activePlacard.label
+                : null
+          }
         />
       ))}
     </group>

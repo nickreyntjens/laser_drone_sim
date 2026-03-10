@@ -1808,6 +1808,52 @@ code {
   backdrop-filter: blur(8px);
 }
 
+.scene-reference-card {
+  position: absolute;
+  right: 18px;
+  bottom: 108px;
+  z-index: 4;
+  width: min(340px, calc(100% - 36px));
+  display: grid;
+  grid-template-columns: 112px 1fr;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid rgba(126, 191, 160, 0.2);
+  border-radius: 18px;
+  background: rgba(8, 15, 13, 0.92);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(14px);
+}
+
+.scene-reference-card-image {
+  width: 112px;
+  height: 112px;
+  border-radius: 12px;
+  object-fit: cover;
+}
+
+.scene-reference-card-body {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+}
+
+.scene-reference-card-body strong {
+  font-size: 0.95rem;
+}
+
+.scene-reference-card-body p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.scene-reference-card-source {
+  color: rgba(214, 237, 227, 0.68);
+  font-size: 0.72rem;
+}
+
 .scene-action-row-collapsed {
   display: none;
 }
@@ -2236,6 +2282,21 @@ code {
 
   .guide-caption {
     padding: 10px 12px;
+  }
+
+  .scene-reference-card {
+    right: 12px;
+    left: 12px;
+    bottom: 156px;
+    width: auto;
+    grid-template-columns: 88px 1fr;
+    gap: 10px;
+    padding: 10px;
+  }
+
+  .scene-reference-card-image {
+    width: 88px;
+    height: 88px;
   }
 
   .safety-editor-grid {

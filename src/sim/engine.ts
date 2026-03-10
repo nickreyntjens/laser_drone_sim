@@ -6,6 +6,13 @@ import {
   lerp
 } from "./defaults";
 import {
+  NOMINAL_FIRING_STANDOFF_DISTANCE_M
+} from "./rendering";
+import {
+  calculateNominalSafetyZoneRadiusM,
+  safetyInputFromParameters
+} from "./safety";
+import {
   add,
   angleFromVector,
   clampLength,
@@ -22,6 +29,12 @@ import {
 } from "./math";
 import { buildSweepPath, generateTargets } from "./generation";
 import { planPreSurveyedTargetRoute } from "./planner";
+import {
+  InternalFarmerState,
+  horizontalDistanceToPoint,
+  initializeFarmers,
+  stepFarmers
+} from "./farmers";
 import {
   MissionDebugState,
   MissionEngineOptions,
@@ -44,9 +57,20 @@ const ATTITUDE_RESPONSE = 0.18;
 const YAW_RESPONSE_S = 0.34;
 const MAX_YAW_RATE_RAD_S = 1.9;
 const RESUME_BUFFER_S = 18;
-const APPROACH_ARRIVAL_RADIUS_M = 0.26;
 const APPROACH_HANDOFF_RADIUS_M = 0.48;
+const FIRING_CONTROL_MARGIN_M = 0.08;
+const FARMER_REVISIT_DELAY_S = 9;
+const FARMER_AVOIDANCE_RADIUS_M = 1.4;
+const FARMER_CLEARANCE_HEIGHT_M = 0.45;
+const FARMER_AVOIDANCE_LOOKAHEAD_S = 1.2;
+const FARMER_AVOIDANCE_INFLUENCE_M = 4.8;
+const FARMER_AVOIDANCE_MARGIN_M = 0.55;
+const FARMER_LATERAL_EVASION_MPS = 0.85;
 const STUCK_WARNING_AFTER_S = 8;
+const APPROACH_BRAKING_BUFFER_M = 0.24;
+const MIN_RECAPTURE_SPEED_MPS = 0.9;
+const MIN_APPROACH_SPEED_MPS = 0.28;
+const MAX_VERTICAL_ACCEL_FACTOR = 0.9;
 
 function cloneVec3(source: Vec3): Vec3 {
   return { x: source.x, y: source.y, z: source.z };
@@ -56,7 +80,8 @@ function cloneTarget(source: TargetState, id: number): TargetState {
   return {
     ...source,
     id,
-    position: cloneVec3(source.position)
+    position: cloneVec3(source.position),
+    blockedUntilS: source.blockedUntilS ?? 0
   };
 }
 
@@ -194,9 +219,13 @@ export class MissionEngine {
 
   public readonly dockPosition: Vec3;
 
+  public readonly nominalSafetyZoneRadiusM: number;
+
   public readonly sweepPath: Vec3[];
 
   public readonly targets: TargetState[];
+
+  public readonly farmers: InternalFarmerState[];
 
   public readonly pathHistory: Vec3[];
 
@@ -256,8 +285,12 @@ export class MissionEngine {
     this.playbackSpeed = playbackSpeed;
     this.renderScaleMPerUnit = RENDER_SCALE_M_PER_UNIT;
     this.dockPosition = vec3(-10, 0.18, params.fieldWidthM * 0.5);
+    this.nominalSafetyZoneRadiusM = calculateNominalSafetyZoneRadiusM(
+      safetyInputFromParameters(params)
+    );
     this.sweepPath = buildSweepPath(params);
     this.targets = normalizeTargets(options.initialTargets ?? generateTargets(params, seed));
+    this.farmers = initializeFarmers(params, seed);
     this.pathHistory = [];
     this.energy = zeroEnergyBreakdown();
     this.summary = null;
@@ -355,6 +388,7 @@ export class MissionEngine {
     this.modeTimerS += simDt;
 
     this.decayTargetEffects(simDt);
+    stepFarmers(this.farmers, this.params, this.drone.position, this.missionElapsedS, simDt);
 
     if (this.drone.mode === "charging") {
       this.stepCharging(simDt);
@@ -371,6 +405,7 @@ export class MissionEngine {
     const acceleration = scale(subtract(this.drone.velocity, beforeVelocity), 1 / simDt);
     this.drone.acceleration = acceleration;
     this.updateAttitude(simDt);
+    this.checkFarmerSafetyInterference();
     this.processModeTransitions();
     this.updateStuckMonitor(simDt);
 
@@ -387,9 +422,9 @@ export class MissionEngine {
       this.energy.laserWh +
       this.energy.avionicsWh;
     const remaining = this.targets.filter((target) => target.alive).length;
-
     return {
       params: this.params,
+      nominalSafetyZoneRadiusM: this.nominalSafetyZoneRadiusM,
       drone: {
         position: cloneVec3(this.drone.position),
         velocity: cloneVec3(this.drone.velocity),
@@ -406,6 +441,10 @@ export class MissionEngine {
         activeWaypointIndex: this.drone.activeWaypointIndex
       },
       targets: this.targets.map((target) => ({ ...target, position: cloneVec3(target.position) })),
+      farmers: this.farmers.map((farmer) => ({
+        ...farmer,
+        position: cloneVec3(farmer.position)
+      })),
       metrics: {
         missionElapsedS: this.missionElapsedS,
         totalEnergyWh,
@@ -526,6 +565,87 @@ export class MissionEngine {
     }
   }
 
+  private isTargetTemporarilyBlocked(targetId: number): boolean {
+    const target = this.targets[targetId];
+    return !!target && target.blockedUntilS > this.missionElapsedS;
+  }
+
+  private deferActiveTargetForFarmer(
+    reason: string,
+    blockingFarmerId: number | null,
+    blockingDistanceM: number | null
+  ): void {
+    if (this.drone.activeTargetId === null) {
+      return;
+    }
+
+    const target = this.targets[this.drone.activeTargetId];
+    if (!target || !target.alive) {
+      return;
+    }
+
+    target.blockedUntilS = this.missionElapsedS + FARMER_REVISIT_DELAY_S;
+    target.engagementProgress = 0;
+    target.queued = true;
+
+    this.targetQueue = this.targetQueue.filter((targetId) => targetId !== target.id);
+    this.targetQueue.push(target.id);
+
+    this.logEvent("safety-hold", "Farmer entered the nominal laser safety zone; deferring shot", {
+      targetId: target.id,
+      farmerId: blockingFarmerId,
+      blockingDistanceM,
+      nominalSafetyZoneRadiusM: this.nominalSafetyZoneRadiusM,
+      blockedUntilS: target.blockedUntilS,
+      queueLength: this.targetQueue.length
+    });
+
+    this.setActiveTarget(null, reason);
+    this.transitionTo("searching", "farmer inside safety zone");
+  }
+
+  private checkFarmerSafetyInterference(): void {
+    if (
+      this.drone.mode !== "approach" &&
+      this.drone.mode !== "aiming" &&
+      this.drone.mode !== "firing"
+    ) {
+      return;
+    }
+
+    const activeTarget =
+      this.drone.activeTargetId !== null ? this.targets[this.drone.activeTargetId] : null;
+    let blockingFarmerId: number | null = null;
+    let blockingDistanceM: number | null = null;
+
+    for (let index = 0; index < this.farmers.length; index += 1) {
+      const farmer = this.farmers[index];
+      const droneDistanceM = horizontalDistanceToPoint(this.drone.position, farmer.position);
+      const targetDistanceM = activeTarget
+        ? horizontalDistanceToPoint(activeTarget.position, farmer.position)
+        : Number.POSITIVE_INFINITY;
+      const targetSafetyHold =
+        activeTarget !== null && targetDistanceM <= this.nominalSafetyZoneRadiusM;
+      const droneAvoidanceHold =
+        droneDistanceM <= FARMER_AVOIDANCE_RADIUS_M &&
+        this.drone.position.y <= farmer.heightM + FARMER_CLEARANCE_HEIGHT_M;
+
+      if (targetSafetyHold || droneAvoidanceHold) {
+        blockingFarmerId = farmer.id;
+        blockingDistanceM = targetSafetyHold ? targetDistanceM : droneDistanceM;
+        break;
+      }
+    }
+
+    if (blockingFarmerId !== null) {
+      this.deferActiveTargetForFarmer(
+        `farmer ${blockingFarmerId} safety hold`,
+        blockingFarmerId,
+        blockingDistanceM
+      );
+    }
+  }
+
   private selectTargetIfNeeded(): void {
     this.pruneTargetQueue("selectTargetIfNeeded");
 
@@ -554,7 +674,15 @@ export class MissionEngine {
 
   private pickNextQueuedTarget(): number | null {
     if (this.params.targetingMode === "preSurveyed") {
-      return this.targetQueue[0] ?? null;
+      for (let index = 0; index < this.targetQueue.length; index += 1) {
+        const targetId = this.targetQueue[index];
+        const target = this.targets[targetId];
+        if (!target || !target.alive || this.isTargetTemporarilyBlocked(targetId)) {
+          continue;
+        }
+        return targetId;
+      }
+      return null;
     }
 
     let bestId: number | null = null;
@@ -563,7 +691,7 @@ export class MissionEngine {
     for (let index = 0; index < this.targetQueue.length; index += 1) {
       const targetId = this.targetQueue[index];
       const target = this.targets[targetId];
-      if (!target || !target.alive) {
+      if (!target || !target.alive || this.isTargetTemporarilyBlocked(targetId)) {
         continue;
       }
 
@@ -575,6 +703,10 @@ export class MissionEngine {
     }
 
     return bestId;
+  }
+
+  private hasEligibleQueuedTarget(): boolean {
+    return this.pickNextQueuedTarget() !== null;
   }
 
   private checkReserveNeed(): void {
@@ -641,7 +773,13 @@ export class MissionEngine {
     if (this.drone.mode === "approach" || this.drone.mode === "aiming" || this.drone.mode === "firing" || this.drone.mode === "confirming") {
       const target = this.drone.activeTargetId !== null ? this.targets[this.drone.activeTargetId] : null;
       if (target) {
-        return vec3(target.position.x, this.params.engageAltitudeM, target.position.z);
+        // Keep a small control margin below the max firing range so the aiming state can settle
+        // without repeatedly falling just outside the nominal 1 m envelope.
+        return vec3(
+          target.position.x,
+          target.position.y + Math.max(0.2, NOMINAL_FIRING_STANDOFF_DISTANCE_M - FIRING_CONTROL_MARGIN_M),
+          target.position.z
+        );
       }
     }
 
@@ -744,6 +882,136 @@ export class MissionEngine {
     this.drone.yawRateRadS = commandedYawRate;
   }
 
+  private computeApproachSpeedMps(
+    horizontalDistanceM: number,
+    targetDirection: Vec3
+  ): number {
+    const maxHorizontalAccelMps2 = Math.max(this.params.maxHorizontalAccelMps2, 0.1);
+    const remainingDistanceM = Math.max(
+      horizontalDistanceM - APPROACH_HANDOFF_RADIUS_M,
+      0
+    );
+
+    if (remainingDistanceM <= 1e-3) {
+      return 0;
+    }
+
+    const horizontalVelocity = vec3(this.drone.velocity.x, 0, this.drone.velocity.z);
+    const closingSpeedMps = dot(horizontalVelocity, targetDirection);
+    const brakingDistanceM =
+      Math.max(closingSpeedMps, 0) * Math.max(closingSpeedMps, 0) /
+      (2 * maxHorizontalAccelMps2);
+
+    if (closingSpeedMps <= 0.05) {
+      return Math.min(
+        this.params.cruiseSpeedMps,
+        Math.max(
+          MIN_RECAPTURE_SPEED_MPS,
+          Math.sqrt(2 * maxHorizontalAccelMps2 * remainingDistanceM)
+        )
+      );
+    }
+
+    if (remainingDistanceM > brakingDistanceM + APPROACH_BRAKING_BUFFER_M) {
+      return this.params.cruiseSpeedMps;
+    }
+
+    return clamp(
+      Math.sqrt(2 * maxHorizontalAccelMps2 * remainingDistanceM),
+      MIN_APPROACH_SPEED_MPS,
+      this.params.cruiseSpeedMps
+    );
+  }
+
+  private computeFarmerAvoidanceVelocity(
+    desiredHorizontalVelocity: Vec3
+  ): Vec3 {
+    if (horizontalLength(desiredHorizontalVelocity) <= 1e-6) {
+      return desiredHorizontalVelocity;
+    }
+
+    let adjustedVelocity = desiredHorizontalVelocity;
+    const maxHorizontalAccelMps2 = Math.max(this.params.maxHorizontalAccelMps2, 0.1);
+
+    for (let index = 0; index < this.farmers.length; index += 1) {
+      const farmer = this.farmers[index];
+      if (this.drone.position.y > farmer.heightM + FARMER_CLEARANCE_HEIGHT_M) {
+        continue;
+      }
+
+      const relPosition = vec3(
+        farmer.position.x - this.drone.position.x,
+        0,
+        farmer.position.z - this.drone.position.z
+      );
+      const distanceToFarmerM = horizontalLength(relPosition);
+      if (distanceToFarmerM <= 1e-6 || distanceToFarmerM > FARMER_AVOIDANCE_INFLUENCE_M) {
+        continue;
+      }
+
+      const farmerDirection = horizontalNormalize(relPosition);
+      const awayDirection = scale(farmerDirection, -1);
+      const tangentDirection = vec3(-farmerDirection.z, 0, farmerDirection.x);
+      const farmerVelocity = vec3(
+        Math.cos(farmer.headingRad) * farmer.speedMps,
+        0,
+        Math.sin(farmer.headingRad) * farmer.speedMps
+      );
+      const relativeVelocity = subtract(adjustedVelocity, farmerVelocity);
+      const relativeSpeedSq = Math.max(dot(relativeVelocity, relativeVelocity), 1e-6);
+      const timeToClosestApproachS = clamp(
+        dot(relPosition, relativeVelocity) / relativeSpeedSq,
+        0,
+        FARMER_AVOIDANCE_LOOKAHEAD_S
+      );
+      const closestApproachVector = subtract(
+        relPosition,
+        scale(relativeVelocity, timeToClosestApproachS)
+      );
+      const closestApproachDistanceM = horizontalLength(closestApproachVector);
+      const clearanceRadiusM =
+        FARMER_AVOIDANCE_RADIUS_M +
+        farmer.shoulderWidthM * 0.5 +
+        FARMER_AVOIDANCE_MARGIN_M;
+      const collisionRisk =
+        distanceToFarmerM <= clearanceRadiusM + 0.25 ||
+        closestApproachDistanceM <= clearanceRadiusM;
+
+      if (!collisionRisk) {
+        continue;
+      }
+
+      const alongFarmerMps = dot(adjustedVelocity, farmerDirection);
+      const tangentialMps = dot(adjustedVelocity, tangentDirection);
+      const farmerAlongMps = dot(farmerVelocity, farmerDirection);
+      const distanceMarginM = Math.max(distanceToFarmerM - clearanceRadiusM, 0);
+      const maxClosingSpeedMps = Math.sqrt(2 * maxHorizontalAccelMps2 * distanceMarginM);
+      const limitedAlongFarmerMps = Math.min(
+        alongFarmerMps,
+        farmerAlongMps + maxClosingSpeedMps
+      );
+      const evasionStrength =
+        clamp(
+          (clearanceRadiusM + 0.9 - Math.min(distanceToFarmerM, closestApproachDistanceM)) /
+            0.9,
+          0,
+          1
+        ) * FARMER_LATERAL_EVASION_MPS;
+      const tangentSign =
+        dot(tangentDirection, adjustedVelocity) >= 0 ? 1 : -1;
+
+      adjustedVelocity = add(
+        add(
+          scale(farmerDirection, limitedAlongFarmerMps),
+          scale(tangentDirection, tangentialMps + tangentSign * evasionStrength)
+        ),
+        scale(awayDirection, evasionStrength * 0.65)
+      );
+    }
+
+    return adjustedVelocity;
+  }
+
   private stepMotion(simDt: number): void {
     if (!isFlightMode(this.drone.mode)) {
       this.drone.velocity = vec3();
@@ -760,17 +1028,10 @@ export class MissionEngine {
     const slowRadius = 5;
     let desiredHorizontalSpeed: number;
     if (this.drone.mode === "approach") {
-      if (horizontalDistanceM <= APPROACH_ARRIVAL_RADIUS_M) {
-        desiredHorizontalSpeed = 0;
-      } else {
-        const approachFactor = clamp(
-          (horizontalDistanceM - APPROACH_ARRIVAL_RADIUS_M) /
-            Math.max(2.2 - APPROACH_ARRIVAL_RADIUS_M, 0.1),
-          0.18,
-          1
-        );
-        desiredHorizontalSpeed = this.params.cruiseSpeedMps * approachFactor;
-      }
+      desiredHorizontalSpeed = this.computeApproachSpeedMps(
+        horizontalDistanceM,
+        horizontalNormalize(horizontalTarget)
+      );
     } else if (
       this.drone.mode === "aiming" ||
       this.drone.mode === "firing" ||
@@ -784,9 +1045,12 @@ export class MissionEngine {
       const cruiseFactor = clamp(horizontalDistanceM / slowRadius, 0.35, 1);
       desiredHorizontalSpeed = this.params.cruiseSpeedMps * cruiseFactor;
     }
-    const desiredHorizontalVelocity = scale(
+    let desiredHorizontalVelocity = scale(
       horizontalNormalize(horizontalTarget),
       desiredHorizontalSpeed
+    );
+    desiredHorizontalVelocity = this.computeFarmerAvoidanceVelocity(
+      desiredHorizontalVelocity
     );
     const desiredVerticalVelocity = clamp(
       verticalError / Math.max(simDt * 2.4, 0.2),
@@ -799,11 +1063,29 @@ export class MissionEngine {
       desiredVerticalVelocity,
       desiredHorizontalVelocity.z
     );
-    const deltaVelocity = subtract(targetVelocity, this.drone.velocity);
-    const maxAcceleration = this.params.maxHorizontalAccelMps2 * simDt;
-    const appliedDelta = clampLength(deltaVelocity, maxAcceleration);
+    const currentHorizontalVelocity = vec3(this.drone.velocity.x, 0, this.drone.velocity.z);
+    const horizontalDeltaVelocity = subtract(
+      vec3(targetVelocity.x, 0, targetVelocity.z),
+      currentHorizontalVelocity
+    );
+    const maxHorizontalDeltaVelocity = this.params.maxHorizontalAccelMps2 * simDt;
+    const appliedHorizontalDeltaVelocity = clampLength(
+      horizontalDeltaVelocity,
+      maxHorizontalDeltaVelocity
+    );
+    const maxVerticalDeltaVelocity =
+      this.params.maxHorizontalAccelMps2 * MAX_VERTICAL_ACCEL_FACTOR * simDt;
+    const appliedVerticalDeltaVelocity = clamp(
+      targetVelocity.y - this.drone.velocity.y,
+      -maxVerticalDeltaVelocity,
+      maxVerticalDeltaVelocity
+    );
 
-    this.drone.velocity = add(this.drone.velocity, appliedDelta);
+    this.drone.velocity = vec3(
+      this.drone.velocity.x + appliedHorizontalDeltaVelocity.x,
+      this.drone.velocity.y + appliedVerticalDeltaVelocity,
+      this.drone.velocity.z + appliedHorizontalDeltaVelocity.z
+    );
     this.drone.position = add(this.drone.position, scale(this.drone.velocity, simDt));
 
     const headingVelocity =
@@ -855,19 +1137,26 @@ export class MissionEngine {
             this.sweepIndex += 1;
             this.drone.activeWaypointIndex = this.sweepIndex;
           } else if (this.targets.some((entry) => entry.alive)) {
-            if (this.targetQueue.length === 0) {
+            const hasEligibleQueuedTarget = this.hasEligibleQueuedTarget();
+            if (this.targetQueue.length === 0 || !hasEligibleQueuedTarget) {
               const restoredTargets = this.restoreKnownTargetsToQueue("completed final sweep lane");
-              if (this.targetQueue.length > 0 || restoredTargets > 0) {
-                const nextTargetId = this.pickNextQueuedTarget();
-                if (nextTargetId !== null) {
-                  this.setActiveTarget(nextTargetId, "recovered target queue after sweep");
-                  this.transitionTo("approach", "queued target recovered after sweep", {
-                    targetId: nextTargetId,
-                    queueLength: this.targetQueue.length
-                  });
-                }
-              } else {
-                this.restartSearchSweep("completed final sweep lane with remaining alive beetles");
+              const nextTargetId = this.pickNextQueuedTarget();
+              if (nextTargetId !== null) {
+                this.setActiveTarget(nextTargetId, "recovered target queue after sweep");
+                this.transitionTo("approach", "queued target recovered after sweep", {
+                  targetId: nextTargetId,
+                  queueLength: this.targetQueue.length
+                });
+              } else if (
+                restoredTargets > 0 ||
+                this.targetQueue.length === 0 ||
+                !hasEligibleQueuedTarget
+              ) {
+                this.restartSearchSweep(
+                  this.targetQueue.length === 0
+                    ? "completed final sweep lane with no queued targets"
+                    : "completed final sweep lane while queued targets were temporarily blocked"
+                );
               }
             }
           } else {
@@ -906,6 +1195,7 @@ export class MissionEngine {
       case "aiming": {
         const activeTarget =
           this.drone.activeTargetId !== null ? this.targets[this.drone.activeTargetId] : null;
+        const targetDistanceM = activeTarget ? distance(this.drone.position, activeTarget.position) : Number.POSITIVE_INFINITY;
         if (activeTarget) {
           activeTarget.engagementProgress = clamp(
             this.modeTimerS / Math.max(this.params.aimDurationS, 0.01),
@@ -916,11 +1206,13 @@ export class MissionEngine {
 
         if (
           this.modeTimerS >= this.params.aimDurationS &&
+          targetDistanceM <= NOMINAL_FIRING_STANDOFF_DISTANCE_M + 1e-3 &&
           horizontalSpeed <= this.params.maxFiringSpeedMps + 1e-3
         ) {
           this.transitionTo("firing", "aim solution stable", {
             targetId: this.drone.activeTargetId,
-            horizontalSpeed
+            horizontalSpeed,
+            targetDistanceM
           });
         }
         break;

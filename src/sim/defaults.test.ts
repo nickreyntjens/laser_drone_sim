@@ -17,4 +17,13 @@ describe("default playback speeds", () => {
   it("defaults to showing only the selected target marker", () => {
     expect(defaultParameters.showOnlySelectedTargetMarkers).toBe(true);
   });
+
+  it("defaults the nominal safety optics close to a 3 m zone", () => {
+    expect(defaultParameters.safetyFocalDistanceM).toBeCloseTo(0.5, 6);
+    expect(defaultParameters.safetyStartingApertureMm).toBeCloseTo(10, 6);
+  });
+
+  it("defaults to 2 farmers per hectare in the field model", () => {
+    expect(defaultParameters.farmersPerHectare).toBeCloseTo(2, 6);
+  });
 });

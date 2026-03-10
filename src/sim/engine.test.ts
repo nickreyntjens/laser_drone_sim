@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { defaultParameters } from "./defaults";
 import { MissionEngine } from "./engine";
+import { NOMINAL_FIRING_STANDOFF_DISTANCE_M } from "./rendering";
 import { DroneMode, SimulationParameters, TargetState } from "./types";
 
 function createTarget(id: number, x: number, z: number): TargetState {
@@ -15,7 +16,8 @@ function createTarget(id: number, x: number, z: number): TargetState {
     neutralizationPulse: 0,
     engagementProgress: 0,
     detectedAtS: null,
-    neutralizedAtS: null
+    neutralizedAtS: null,
+    blockedUntilS: 0
   };
 }
 
@@ -35,6 +37,7 @@ function createTestParams(overrides: Partial<SimulationParameters> = {}): Simula
     fieldWidthM: 12,
     edgeDensityPerHectare: 0,
     gradientStrength: 1.2,
+    farmersPerHectare: 0,
     batteryCapacityWh: 320,
     droneMassKg: 6.4,
     cruiseSpeedMps: 4.2,
@@ -85,6 +88,10 @@ function stepSeconds(engine: MissionEngine, seconds: number, stepS = 0.05): void
   for (let elapsed = 0; elapsed < seconds; elapsed += stepS) {
     engine.step(stepS);
   }
+}
+
+function distanceBetween(a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }): number {
+  return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2);
 }
 
 function runUntil(
@@ -528,6 +535,312 @@ describe("MissionEngine", () => {
     runUntil(engine, () => engine.summary !== null, 60);
     expect(engine.summary?.beetlesNeutralized).toBe(2);
     assertNoStuckWarnings(engine);
+  });
+
+  it("only fires once the drone is within the nominal 1 m standoff distance", () => {
+    const engine = buildEngine([createTarget(0, 6.2, 4.5)], {
+      params: createTestParams({
+        targetingMode: "preSurveyed",
+        maxFiringSpeedMps: 0.2,
+        aimDurationS: 0.12
+      })
+    });
+
+    runUntil(engine, () => engine.drone.mode === "firing", 30);
+
+    expect(engine.drone.activeTargetId).toBe(0);
+    expect(distanceBetween(engine.drone.position, engine.targets[0].position)).toBeLessThanOrEqual(
+      NOMINAL_FIRING_STANDOFF_DISTANCE_M + 0.05
+    );
+  });
+
+  it("recaptures an overshot target quickly instead of crawling back at low speed", () => {
+    const params = createTestParams({
+      targetingMode: "preSurveyed",
+      maxHorizontalAccelMps2: 2.8,
+      aimDurationS: 0.1
+    });
+    const engine = buildEngine([createTarget(0, 6.2, 4.5)], { params });
+
+    runUntil(
+      engine,
+      () => engine.drone.mode === "approach" && engine.drone.activeTargetId === 0,
+      20
+    );
+
+    const target = engine.targets[0];
+    engine.drone.position = {
+      x: target.position.x + 0.72,
+      y: target.position.y + NOMINAL_FIRING_STANDOFF_DISTANCE_M - 0.02,
+      z: target.position.z
+    };
+    engine.drone.velocity = { x: 2.2, y: 0, z: 0 };
+    engine.drone.acceleration = { x: 0, y: 0, z: 0 };
+
+    runUntil(
+      engine,
+      () => engine.drone.mode === "aiming" || engine.drone.mode === "firing",
+      2.5
+    );
+
+    expect(engine.drone.activeTargetId).toBe(0);
+    expect(distanceBetween(engine.drone.position, target.position)).toBeLessThanOrEqual(
+      NOMINAL_FIRING_STANDOFF_DISTANCE_M + 0.15
+    );
+  });
+
+  it("defers a blocked shot when a farmer enters the safety zone and revisits the target later", () => {
+    const engine = buildEngine(
+      [
+        createTarget(0, 6.2, 36),
+        createTarget(1, 28, 56)
+      ],
+      {
+        params: createTestParams({
+          targetingMode: "preSurveyed",
+          fieldLengthM: 120,
+          fieldWidthM: 90,
+          farmersPerHectare: 4
+        })
+      }
+    );
+    expect(engine.farmers.length).toBeGreaterThan(0);
+    engine.farmers[0].position = { x: 6.2, y: 0, z: 36 };
+    engine.farmers[0].baseZ = 36;
+    engine.farmers[0].offsetXM = 0;
+
+    runUntil(
+      engine,
+      () => engine.getDebugLog().some((entry) => entry.event === "safety-hold"),
+      40
+    );
+    const safetyHoldEntry = engine.getDebugLog().find((entry) => entry.event === "safety-hold");
+
+    expect(
+      engine.getDebugLog().some(
+        (entry) => entry.event === "safety-hold" && entry.data?.targetId === 0
+      )
+    ).toBe(true);
+    expect(safetyHoldEntry?.data?.farmerId).toBe(0);
+    expect(Number(safetyHoldEntry?.data?.nominalSafetyZoneRadiusM ?? 0)).toBeGreaterThan(2.5);
+    expect(Number(safetyHoldEntry?.data?.blockingDistanceM ?? 0)).toBeLessThan(
+      Number(safetyHoldEntry?.data?.nominalSafetyZoneRadiusM ?? 0)
+    );
+
+    for (const farmer of engine.farmers) {
+      farmer.position = { x: -20, y: 0, z: 4 };
+      farmer.baseZ = 4;
+      farmer.offsetXM = -12;
+    }
+
+    runUntil(engine, () => engine.summary !== null, 80);
+
+    expect(engine.summary?.beetlesNeutralized).toBe(2);
+    expect(engine.getDebugLog().some((entry) => entry.event === "safety-hold")).toBe(true);
+    assertNoStuckWarnings(engine);
+  });
+
+  it("re-engages a farmer-deferred target quickly after an overshoot", () => {
+    const engine = buildEngine([createTarget(0, 6.2, 36)], {
+      params: createTestParams({
+        targetingMode: "preSurveyed",
+        fieldLengthM: 120,
+        fieldWidthM: 90,
+        farmersPerHectare: 4,
+        maxHorizontalAccelMps2: 2.8,
+        aimDurationS: 0.1
+      })
+    });
+
+    expect(engine.farmers.length).toBeGreaterThan(0);
+    engine.farmers[0].position = { x: 6.2, y: 0, z: 36 };
+    engine.farmers[0].baseZ = 36;
+    engine.farmers[0].offsetXM = 0;
+
+    runUntil(
+      engine,
+      () => engine.getDebugLog().some((entry) => entry.event === "safety-hold"),
+      40
+    );
+
+    const target = engine.targets[0];
+    target.blockedUntilS = engine.getSnapshot().metrics.missionElapsedS;
+    for (const farmer of engine.farmers) {
+      farmer.position = { x: -20, y: 0, z: 4 };
+      farmer.baseZ = 4;
+      farmer.offsetXM = -12;
+    }
+
+    engine.drone.position = {
+      x: target.position.x + 0.72,
+      y: target.position.y + NOMINAL_FIRING_STANDOFF_DISTANCE_M - 0.02,
+      z: target.position.z
+    };
+    engine.drone.velocity = { x: 2.2, y: 0, z: 0 };
+    engine.drone.acceleration = { x: 0, y: 0, z: 0 };
+
+    runUntil(
+      engine,
+      () =>
+        engine.drone.activeTargetId === 0 &&
+        (engine.drone.mode === "aiming" || engine.drone.mode === "firing"),
+      2.5
+    );
+
+    expect(distanceBetween(engine.drone.position, target.position)).toBeLessThanOrEqual(
+      NOMINAL_FIRING_STANDOFF_DISTANCE_M + 0.15
+    );
+  });
+
+  it("defers a target immediately when a farmer is already inside the target's nominal safety zone", () => {
+    const params = createTestParams({
+      targetingMode: "preSurveyed",
+      fieldLengthM: 120,
+      fieldWidthM: 90,
+      farmersPerHectare: 4,
+      laserPowerW: 50,
+      engagementDwellS: 0.2,
+      safetyFocalDistanceM: 0.5,
+      safetyStartingApertureMm: 10
+    });
+    const engine = buildEngine([createTarget(0, 6.2, 36)], { params });
+
+    expect(engine.farmers.length).toBeGreaterThan(0);
+    expect(engine.nominalSafetyZoneRadiusM).toBeGreaterThan(2);
+
+    engine.farmers[0].position = {
+      x: 6.2 + engine.nominalSafetyZoneRadiusM - 0.25,
+      y: 0,
+      z: 36
+    };
+    engine.farmers[0].baseZ = 36;
+    engine.farmers[0].offsetXM = engine.nominalSafetyZoneRadiusM - 0.25;
+    engine.farmers[0].headingRad = 0;
+    engine.farmers[0].speedMps = 0;
+
+    runUntil(
+      engine,
+      () => engine.getDebugLog().some((entry) => entry.event === "safety-hold"),
+      5
+    );
+
+    const safetyHoldEntry = engine.getDebugLog().find((entry) => entry.event === "safety-hold");
+    expect(safetyHoldEntry?.mode).toBe("approach");
+    expect(Number(safetyHoldEntry?.data?.blockingDistanceM ?? 0)).toBeLessThan(
+      engine.nominalSafetyZoneRadiusM
+    );
+    expect(engine.getDebugLog().some((entry) => entry.event === "stuck-warning")).toBe(false);
+  });
+
+  it("maintains separation from a farmer during a fast low-altitude approach", () => {
+    const engine = buildEngine([createTarget(0, 18, 36)], {
+      params: createTestParams({
+        targetingMode: "preSurveyed",
+        fieldLengthM: 120,
+        fieldWidthM: 90,
+        farmersPerHectare: 4,
+        cruiseSpeedMps: 4.4,
+        maxHorizontalAccelMps2: 2.8,
+        aimDurationS: 0.1
+      })
+    });
+
+    expect(engine.farmers.length).toBeGreaterThan(0);
+    engine.farmers[0].position = { x: 8, y: 0, z: 36 };
+    engine.farmers[0].baseZ = 36;
+    engine.farmers[0].offsetXM = 0;
+    engine.farmers[0].headingRad = 0;
+    engine.farmers[0].speedMps = 0;
+
+    runUntil(
+      engine,
+      () => engine.drone.mode === "approach" && engine.drone.activeTargetId === 0,
+      20
+    );
+
+    engine.drone.position = {
+      x: 2.6,
+      y: engine.farmers[0].heightM + 0.08,
+      z: 36
+    };
+    engine.drone.velocity = { x: 4.4, y: 0, z: 0 };
+    engine.drone.acceleration = { x: 0, y: 0, z: 0 };
+
+    let minFarmerDistanceM = Number.POSITIVE_INFINITY;
+    for (let elapsed = 0; elapsed < 1.6; elapsed += 0.05) {
+      engine.step(0.05);
+      minFarmerDistanceM = Math.min(
+        minFarmerDistanceM,
+        Math.hypot(
+          engine.drone.position.x - engine.farmers[0].position.x,
+          engine.drone.position.z - engine.farmers[0].position.z
+        )
+      );
+    }
+
+    expect(minFarmerDistanceM).toBeGreaterThan(1.45);
+
+    engine.farmers[0].position = { x: -20, y: 0, z: 4 };
+    engine.farmers[0].baseZ = 4;
+    engine.farmers[0].offsetXM = -12;
+
+    runUntil(
+      engine,
+      () => engine.drone.mode === "aiming" || engine.drone.mode === "firing",
+      8
+    );
+
+    expect(engine.drone.activeTargetId).toBe(0);
+  });
+
+  it("does not remain parked at the end of a sweep while all queued targets are temporarily blocked", () => {
+    const engine = buildEngine([createTarget(0, 18, 36)], {
+      params: createTestParams({
+        targetingMode: "preSurveyed",
+        fieldLengthM: 120,
+        fieldWidthM: 90,
+        farmersPerHectare: 4
+      })
+    });
+
+    expect(engine.farmers.length).toBeGreaterThan(0);
+    engine.farmers[0].position = { x: 18, y: 0, z: 36 };
+    engine.farmers[0].baseZ = 36;
+    engine.farmers[0].offsetXM = 0;
+
+    runUntil(
+      engine,
+      () => engine.getDebugLog().some((entry) => entry.event === "safety-hold"),
+      40
+    );
+
+    const lastSweepWaypoint = engine.sweepPath[engine.sweepPath.length - 1];
+    engine.drone.position = { ...lastSweepWaypoint };
+    engine.drone.velocity = { x: 0, y: 0, z: 0 };
+    engine.drone.acceleration = { x: 0, y: 0, z: 0 };
+    engine.drone.mode = "searching";
+    engine.drone.activeTargetId = null;
+    engine.drone.activeWaypointIndex = engine.sweepPath.length - 1;
+    (engine as any).sweepIndex = engine.sweepPath.length - 1;
+
+    engine.step(0.05);
+
+    expect(
+      engine.getDebugLog().some(
+        (entry) =>
+          entry.event === "search-reset" &&
+          entry.message.includes("Restarting sweep")
+      )
+    ).toBe(true);
+
+    const before = { ...engine.drone.position };
+    stepSeconds(engine, 1.5);
+    expect(
+      Math.hypot(
+        before.x - engine.drone.position.x,
+        before.z - engine.drone.position.z
+      )
+    ).toBeGreaterThan(0.5);
   });
 
   it("exposes remaining charge time and can skip charging to full", () => {

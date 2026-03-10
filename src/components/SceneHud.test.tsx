@@ -7,6 +7,7 @@ import { SceneHud } from "./SceneHud";
 function createSnapshot(): SimulationSnapshot {
   return {
     params: defaultParameters,
+    nominalSafetyZoneRadiusM: 3,
     drone: {
       position: { x: 0, y: defaultParameters.searchAltitudeM, z: 0 },
       velocity: { x: 3, y: 0, z: 4 },
@@ -44,6 +45,7 @@ function createSnapshot(): SimulationSnapshot {
     },
     chargeStatus: null,
     summary: null,
+    farmers: [],
     seed: 17,
     playbackSpeed: 5.25,
     renderScaleMPerUnit: 5,

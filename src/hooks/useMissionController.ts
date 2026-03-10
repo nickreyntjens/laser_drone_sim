@@ -1,6 +1,6 @@
 import { MutableRefObject, useEffect, useRef, useState } from "react";
 import { MissionEngine } from "../sim/engine";
-import { SimulationParameters, SimulationSnapshot } from "../sim/types";
+import { MissionLogEvent, SimulationParameters, SimulationSnapshot } from "../sim/types";
 
 interface UseMissionControllerResult {
   engineRef: MutableRefObject<MissionEngine>;
@@ -21,17 +21,20 @@ export function useMissionController(
   seed: number,
   scenarioVersion: number,
   playbackSpeed: number,
-  startRunning = true
+  startRunning = true,
+  onLogEvent?: (entry: MissionLogEvent) => void
 ): UseMissionControllerResult {
+  const emitLogEvent = (entry: MissionLogEvent): void => {
+    if (import.meta.env.DEV) {
+      console.debug("[mission]", entry);
+    }
+    onLogEvent?.(entry);
+  };
+
   const engineRef = useRef<MissionEngine>(
     new MissionEngine(params, seed, playbackSpeed, {
-      enableDebugLogging: import.meta.env.DEV,
-      onLogEvent: import.meta.env.DEV
-        ? (entry) => {
-            // Mission logs make non-visual state-machine failures inspectable from the browser console.
-            console.debug("[mission]", entry);
-          }
-        : undefined
+      enableDebugLogging: import.meta.env.DEV || !!onLogEvent,
+      onLogEvent: import.meta.env.DEV || onLogEvent ? emitLogEvent : undefined
     })
   );
   const [snapshot, setSnapshot] = useState<SimulationSnapshot>(engineRef.current.getSnapshot());
@@ -41,18 +44,14 @@ export function useMissionController(
 
   useEffect(() => {
     engineRef.current = new MissionEngine(params, seed, playbackSpeed, {
-      enableDebugLogging: import.meta.env.DEV,
-      onLogEvent: import.meta.env.DEV
-        ? (entry) => {
-            console.debug("[mission]", entry);
-          }
-        : undefined
+      enableDebugLogging: import.meta.env.DEV || !!onLogEvent,
+      onLogEvent: import.meta.env.DEV || onLogEvent ? emitLogEvent : undefined
     });
     introElapsedRef.current = 0;
     setIntroElapsedS(0);
     setSnapshot(engineRef.current.getSnapshot());
     setIsRunning(startRunning);
-  }, [params, seed, scenarioVersion, startRunning]);
+  }, [onLogEvent, params, scenarioVersion, seed, startRunning]);
 
   useEffect(() => {
     engineRef.current.playbackSpeed = playbackSpeed;

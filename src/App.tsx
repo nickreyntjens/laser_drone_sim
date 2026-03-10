@@ -1,10 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BuildPromptPanel } from "./components/BuildPromptPanel";
 import { ControlPanel } from "./components/ControlPanel";
 import { LiveMetrics } from "./components/LiveMetrics";
 import { MethodologyPanel } from "./components/MethodologyPanel";
+import {
+  deriveSafetyZoneEditorView,
+  SafetyZoneEditorDraft,
+  SafetyZonePanel
+} from "./components/SafetyZonePanel";
 import { SceneHud } from "./components/SceneHud";
-import { SimulationScene } from "./components/SimulationScene";
+import { SafetyEditorPreviewState, SimulationScene } from "./components/SimulationScene";
 import { SummaryPanel } from "./components/SummaryPanel";
 import { useMissionAudio } from "./hooks/useMissionAudio";
 import { useMissionController } from "./hooks/useMissionController";
@@ -14,12 +19,21 @@ import {
   DEFAULT_SEED,
   PLAYBACK_SPEED,
   PLAYBACK_SPEED_OPTIONS,
+  clamp,
   defaultParameters
 } from "./sim/defaults";
-import { SimulationParameters } from "./sim/types";
+import { calculateSafetyMetrics, safetyInputFromParameters } from "./sim/safety";
+import { MissionLogEvent, SimulationParameters } from "./sim/types";
 
 type CameraMode = "follow" | "overview" | "dock" | "manual";
-type OverlayScreen = "setup" | "telemetry" | "report" | "notes" | "buildPrompt" | null;
+type OverlayScreen =
+  | "setup"
+  | "telemetry"
+  | "report"
+  | "notes"
+  | "buildPrompt"
+  | "safetyZone"
+  | null;
 type TutorialStep = {
   id: string;
   selector: string;
@@ -35,6 +49,11 @@ type ParentViewportMessage =
       source: "photonic-parent-page";
       type: "make-big" | "shrink";
     };
+interface FarmerSafetyToast {
+  message: string;
+  blockingDistanceM: number | null;
+  nominalSafetyZoneRadiusM: number | null;
+}
 
 function notifyParentViewportMode(type: "make-big" | "shrink"): void {
   if (typeof window === "undefined" || window.parent === window) {
@@ -53,6 +72,7 @@ function readRuntimeConfig(): {
   startRunning: boolean;
   initialCameraMode: CameraMode;
   startExpanded: boolean;
+  startSafetyEditor: boolean;
   markerModeOverride: "selected" | "all" | null;
 } {
   const search =
@@ -72,6 +92,7 @@ function readRuntimeConfig(): {
     startRunning: search.get("autoplay") !== "0",
     initialCameraMode,
     startExpanded: search.get("expanded") === "1",
+    startSafetyEditor: search.get("safetyEditor") === "1",
     markerModeOverride:
       search.get("markers") === "all"
         ? "all"
@@ -91,6 +112,32 @@ function parametersDiffer(a: SimulationParameters, b: SimulationParameters): boo
   }
 
   return false;
+}
+
+function createSafetyEditorDraft(
+  params: SimulationParameters,
+  initialPreviewDistanceM?: number | null
+): SafetyZoneEditorDraft {
+  const metrics = calculateSafetyMetrics(safetyInputFromParameters(params));
+  const shotEnergyJ = params.laserPowerW * params.engagementDwellS;
+  const presetShotEnergyJ = [0.5, 1, 3, 5].reduce(
+    (best, candidate) =>
+      Math.abs(candidate - shotEnergyJ) < Math.abs(best - shotEnergyJ)
+        ? candidate
+        : best,
+    0.5
+  );
+  return {
+    safetyFocalDistanceM: params.safetyFocalDistanceM,
+    safetyStartingApertureMm: params.safetyStartingApertureMm,
+    laserPowerW: params.laserPowerW,
+    requiredShotEnergyJ: presetShotEnergyJ,
+    previewFarmerDistanceM: clamp(
+      initialPreviewDistanceM ?? metrics.nominalSafetyZoneRadiusM * 0.7,
+      0.5,
+      Math.max(metrics.nominalSafetyZoneRadiusM * 1.6, 4)
+    )
+  };
 }
 
 const TUTORIAL_STEPS: TutorialStep[] = [
@@ -134,21 +181,58 @@ export default function App(): JSX.Element {
   const [seed, setSeed] = useState(DEFAULT_SEED);
   const [scenarioVersion, setScenarioVersion] = useState(0);
   const [cameraMode, setCameraMode] = useState<CameraMode>(runtimeConfig.initialCameraMode);
-  const [activeOverlay, setActiveOverlay] = useState<OverlayScreen>(null);
-  const [isExpanded, setIsExpanded] = useState(runtimeConfig.startExpanded);
+  const [activeOverlay, setActiveOverlay] = useState<OverlayScreen>(
+    runtimeConfig.startSafetyEditor ? "safetyZone" : null
+  );
+  const [isExpanded, setIsExpanded] = useState(
+    runtimeConfig.startExpanded || runtimeConfig.startSafetyEditor
+  );
   const [controlsHidden, setControlsHidden] = useState(false);
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(PLAYBACK_SPEED);
   const [showBuildToast, setShowBuildToast] = useState(false);
   const [showMissionCompleteToast, setShowMissionCompleteToast] = useState(false);
+  const [farmerSafetyToast, setFarmerSafetyToast] = useState<FarmerSafetyToast | null>(null);
+  const [suppressFarmerSafetyToast, setSuppressFarmerSafetyToast] = useState(false);
+  const [safetyEditorDraft, setSafetyEditorDraft] = useState<SafetyZoneEditorDraft | null>(
+    runtimeConfig.startSafetyEditor ? createSafetyEditorDraft(initialParams) : null
+  );
   const [hasAutoShownTutorial, setHasAutoShownTutorial] = useState(false);
   const [tutorialStepIndex, setTutorialStepIndex] = useState<number | null>(null);
   const [tutorialRect, setTutorialRect] = useState<DOMRect | null>(null);
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [actionMenuOpen, setActionMenuOpen] = useState(false);
   const watchSecondsRef = useRef(0);
   const buildToastTriggeredRef = useRef(false);
   const previousSummaryRef = useRef(false);
+  const safetyEditorResumeRef = useRef(false);
   const { isMobileUi } = useResponsiveUi();
   const isStandalonePage = typeof window !== "undefined" && window.parent === window;
+
+  const handleMissionLog = useCallback((entry: MissionLogEvent): void => {
+    if (entry.event !== "safety-hold") {
+      return;
+    }
+
+    if (suppressFarmerSafetyToast) {
+      return;
+    }
+
+    const blockingDistanceM =
+      typeof entry.data?.blockingDistanceM === "number" ? entry.data.blockingDistanceM : null;
+    const nominalSafetyZoneRadiusM =
+      typeof entry.data?.nominalSafetyZoneRadiusM === "number"
+        ? entry.data.nominalSafetyZoneRadiusM
+        : null;
+    const distanceMessage =
+      blockingDistanceM !== null && nominalSafetyZoneRadiusM !== null
+        ? `${blockingDistanceM.toFixed(1)} m from the firing axis is inside the current ${nominalSafetyZoneRadiusM.toFixed(1)} m nominal safety zone.`
+        : "The shot is deferred and the target will be revisited after the zone clears.";
+
+    setFarmerSafetyToast({
+      message: distanceMessage,
+      blockingDistanceM,
+      nominalSafetyZoneRadiusM
+    });
+  }, [suppressFarmerSafetyToast]);
 
   const {
     engineRef,
@@ -163,7 +247,8 @@ export default function App(): JSX.Element {
     seed,
     scenarioVersion,
     playbackSpeed,
-    runtimeConfig.startRunning
+    runtimeConfig.startRunning,
+    handleMissionLog
   );
   const interactiveButtonsVisible = isExpanded && !controlsHidden;
   const { soundEnabled, toggleSound } = useMissionAudio(snapshot);
@@ -173,7 +258,23 @@ export default function App(): JSX.Element {
     [activeParams, draftParams]
   );
   const tutorialStep = tutorialStepIndex === null ? null : TUTORIAL_STEPS[tutorialStepIndex];
+  const safetyEditorActive = activeOverlay === "safetyZone" && safetyEditorDraft !== null;
   const tutorialVisible = isExpanded && !controlsHidden && tutorialStep !== null;
+  const safetyEditorPreview = useMemo<SafetyEditorPreviewState | null>(() => {
+    if (!safetyEditorDraft) {
+      return null;
+    }
+
+    const { metrics, previewFarmerDistanceM } = deriveSafetyZoneEditorView(
+      safetyEditorDraft
+    );
+    return {
+      previewFarmerDistanceM,
+      nominalSafetyZoneRadiusM: metrics.nominalSafetyZoneRadiusM,
+      farmerSelected: true,
+      onToggleFarmerSelection: () => undefined
+    };
+  }, [safetyEditorDraft]);
 
   const setViewportExpanded = (nextValue: boolean, syncParent = false): void => {
     setIsExpanded(nextValue);
@@ -217,8 +318,73 @@ export default function App(): JSX.Element {
     }));
   };
 
+  const closeSafetyZoneEditor = (resumeMission = safetyEditorResumeRef.current): void => {
+    setSafetyEditorDraft(null);
+    setActiveOverlay(null);
+    if (resumeMission) {
+      setIsRunning(true);
+    }
+    safetyEditorResumeRef.current = false;
+  };
+
+  const closeOverlay = (): void => {
+    if (activeOverlay === "safetyZone") {
+      closeSafetyZoneEditor();
+      return;
+    }
+    setActiveOverlay(null);
+  };
+
+  const openSafetyZoneEditor = (initialPreviewDistanceM?: number | null): void => {
+    setViewportExpanded(true, true);
+    setControlsHidden(false);
+    setTutorialStepIndex(null);
+    setTutorialRect(null);
+    setFarmerSafetyToast(null);
+    setSafetyEditorDraft(createSafetyEditorDraft(activeParams, initialPreviewDistanceM));
+    setActionMenuOpen(false);
+    safetyEditorResumeRef.current = isRunning;
+    setIsRunning(false);
+    setActiveOverlay("safetyZone");
+  };
+
+  const applySafetyZoneChanges = (): void => {
+    if (!safetyEditorDraft) {
+      return;
+    }
+
+    const { derivedDwellS } = deriveSafetyZoneEditorView(safetyEditorDraft);
+    const patchedFields = {
+      laserPowerW: safetyEditorDraft.laserPowerW,
+      engagementDwellS: derivedDwellS,
+      safetyFocalDistanceM: safetyEditorDraft.safetyFocalDistanceM,
+      safetyStartingApertureMm: safetyEditorDraft.safetyStartingApertureMm
+    };
+    const nextParams = {
+      ...activeParams,
+      ...patchedFields
+    };
+
+    setActiveParams(nextParams);
+    setDraftParams((current) => ({
+      ...current,
+      ...patchedFields
+    }));
+    setFarmerSafetyToast(null);
+    setSafetyEditorDraft(null);
+    setActiveOverlay(null);
+    setActionMenuOpen(false);
+    safetyEditorResumeRef.current = false;
+    setScenarioVersion((value) => value + 1);
+  };
+
   const toggleOverlay = (screen: Exclude<OverlayScreen, null>): void => {
-    setActiveOverlay((current) => (current === screen ? null : screen));
+    setActiveOverlay((current) => {
+      if (current === screen) {
+        return null;
+      }
+      return screen;
+    });
   };
 
   const openOverlay = (screen: Exclude<OverlayScreen, null>): void => {
@@ -249,7 +415,24 @@ export default function App(): JSX.Element {
       <MethodologyPanel snapshot={snapshot} onOpenBuildPrompt={() => openOverlay("buildPrompt")} />
     ) : activeOverlay === "buildPrompt" ? (
       <BuildPromptPanel />
+    ) : activeOverlay === "safetyZone" && safetyEditorDraft ? (
+      <SafetyZonePanel
+        draft={safetyEditorDraft}
+        onChange={(patch) =>
+          setSafetyEditorDraft((current) => (current ? { ...current, ...patch } : current))
+        }
+        onApply={applySafetyZoneChanges}
+        onClose={() => closeSafetyZoneEditor()}
+      />
     ) : null;
+
+  useEffect(() => {
+    if (!runtimeConfig.startSafetyEditor || safetyEditorDraft || activeOverlay === "safetyZone") {
+      return;
+    }
+
+    openSafetyZoneEditor();
+  }, [activeOverlay, runtimeConfig.startSafetyEditor, safetyEditorDraft]);
 
   useEffect(() => {
     if (typeof document === "undefined") {
@@ -267,6 +450,10 @@ export default function App(): JSX.Element {
 
     const handleKeyDown = (event: KeyboardEvent): void => {
       if (event.key === "Escape") {
+        if (activeOverlay !== null) {
+          closeOverlay();
+          return;
+        }
         setViewportExpanded(false, true);
         return;
       }
@@ -275,7 +462,7 @@ export default function App(): JSX.Element {
         setControlsHidden((value) => {
           const nextValue = !value;
           if (nextValue) {
-            setActiveOverlay(null);
+            closeOverlay();
           }
           return nextValue;
         });
@@ -284,30 +471,35 @@ export default function App(): JSX.Element {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isExpanded]);
+  }, [activeOverlay, isExpanded]);
 
   useEffect(() => {
     if (!isExpanded) {
+      if (activeOverlay === "safetyZone" && safetyEditorResumeRef.current) {
+        setIsRunning(true);
+        safetyEditorResumeRef.current = false;
+      }
       setControlsHidden(false);
       setActiveOverlay(null);
+      setSafetyEditorDraft(null);
+      setActionMenuOpen(false);
       setTutorialStepIndex(null);
       setTutorialRect(null);
-      setMobileMenuOpen(false);
     }
-  }, [isExpanded]);
+  }, [activeOverlay, isExpanded, setIsRunning]);
 
   useEffect(() => {
-    if (!isMobileUi) {
-      setMobileMenuOpen(false);
-    }
-  }, [isMobileUi]);
-
-  useEffect(() => {
-    if (isExpanded && !hasAutoShownTutorial && tutorialStepIndex === null && !controlsHidden) {
+    if (
+      isExpanded &&
+      activeOverlay === null &&
+      !hasAutoShownTutorial &&
+      tutorialStepIndex === null &&
+      !controlsHidden
+    ) {
       setHasAutoShownTutorial(true);
       startTutorial();
     }
-  }, [controlsHidden, hasAutoShownTutorial, isExpanded, tutorialStepIndex]);
+  }, [activeOverlay, controlsHidden, hasAutoShownTutorial, isExpanded, tutorialStepIndex]);
 
   useEffect(() => {
     if (!tutorialVisible || !tutorialStep || typeof window === "undefined") {
@@ -420,24 +612,27 @@ export default function App(): JSX.Element {
             introProgress={introProgress}
             isIntroActive={isIntroActive}
             isExpanded={isExpanded}
-            controlsHidden={controlsHidden}
+            controlsHidden={controlsHidden || safetyEditorActive}
             isMobileUi={isMobileUi}
-            mobileMenuOpen={mobileMenuOpen}
+            mobileMenuOpen={actionMenuOpen}
             playbackSpeed={playbackSpeed}
             playbackSpeedOptions={[...PLAYBACK_SPEED_OPTIONS]}
             onPlaybackSpeedChange={setPlaybackSpeed}
             cameraMode={cameraMode}
             onCameraModeChange={setCameraMode}
+            safetyEditorPreview={safetyEditorActive ? safetyEditorPreview : null}
           />
-          <SceneHud
-            snapshot={snapshot}
-            isIntroActive={isIntroActive}
-            isExpanded={isExpanded}
-            controlsHidden={controlsHidden}
-            isMobileUi={isMobileUi}
-          />
+          {!safetyEditorActive ? (
+            <SceneHud
+              snapshot={snapshot}
+              isIntroActive={isIntroActive}
+              isExpanded={isExpanded}
+              controlsHidden={controlsHidden}
+              isMobileUi={isMobileUi}
+            />
+          ) : null}
 
-          {!controlsHidden ? (
+          {!controlsHidden && !safetyEditorActive ? (
             <div className={isExpanded ? "scene-toast-stack scene-toast-stack-expanded" : "scene-toast-stack"}>
               {snapshot.chargeStatus ? (
               <div className="scene-toast">
@@ -449,6 +644,37 @@ export default function App(): JSX.Element {
                   <div className="scene-toast-actions">
                     <button className="secondary-button" onClick={skipCharging}>
                       Skip recharging
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+              ) : null}
+
+              {farmerSafetyToast ? (
+              <div className="scene-toast">
+                <div>
+                  <strong>Farmer in NSZ</strong>
+                  <p>{farmerSafetyToast.message}</p>
+                </div>
+                {!controlsHidden ? (
+                  <div className="scene-toast-actions">
+                    <button
+                      className="primary-button"
+                      onClick={() => openSafetyZoneEditor(farmerSafetyToast.blockingDistanceM)}
+                    >
+                      Edit nominal safety zone
+                    </button>
+                    <button className="secondary-button" onClick={() => setFarmerSafetyToast(null)}>
+                      Dismiss
+                    </button>
+                    <button
+                      className="secondary-button"
+                      onClick={() => {
+                        setSuppressFarmerSafetyToast(true);
+                        setFarmerSafetyToast(null);
+                      }}
+                    >
+                      Dismiss and don&apos;t show again
                     </button>
                   </div>
                 ) : null}
@@ -495,6 +721,7 @@ export default function App(): JSX.Element {
             </div>
           ) : null}
 
+          {!safetyEditorActive ? (
           <div className="scene-action-dock">
             {isExpanded ? (
               controlsHidden ? (
@@ -509,18 +736,20 @@ export default function App(): JSX.Element {
               ) : (
                 <>
                   <div className="scene-action-row scene-action-row-mobile-toggle">
-                    {isMobileUi ? (
-                      <button className="secondary-button" onClick={() => setMobileMenuOpen((value) => !value)}>
-                        {mobileMenuOpen ? "Close menu" : "Menu"}
-                      </button>
-                    ) : null}
+                    <button
+                      className="secondary-button"
+                      onClick={() => setActionMenuOpen((value) => !value)}
+                    >
+                      {actionMenuOpen ? "Close menu" : "Menu"}
+                    </button>
                     <button
                       className="secondary-button"
                       onClick={() => {
                         setControlsHidden((value) => {
                           const nextValue = !value;
                           if (nextValue) {
-                            setActiveOverlay(null);
+                            closeOverlay();
+                            setActionMenuOpen(false);
                           }
                           return nextValue;
                         });
@@ -529,61 +758,89 @@ export default function App(): JSX.Element {
                       Hide buttons
                     </button>
                   </div>
-                  <div className={isMobileUi && !mobileMenuOpen ? "scene-action-row scene-action-row-collapsed" : "scene-action-row"}>
-                    <button
-                      className={activeOverlay === "setup" ? "camera-button active" : "camera-button"}
-                      data-tutorial-id="setup-button"
-                      onClick={() => toggleOverlay("setup")}
-                    >
-                      Setup
-                    </button>
-                    <button
-                      className={activeOverlay === "telemetry" ? "camera-button active" : "camera-button"}
-                      data-tutorial-id="telemetry-button"
-                      onClick={() => toggleOverlay("telemetry")}
-                    >
-                      {isMobileUi ? "Stats" : "Telemetry"}
-                    </button>
-                    <button
-                      className={activeOverlay === "report" ? "camera-button active" : "camera-button"}
-                      onClick={() => toggleOverlay("report")}
-                    >
-                      {isMobileUi ? "Report" : "Mission report"}
-                    </button>
-                    <button
-                      className={activeOverlay === "notes" ? "camera-button active" : "camera-button"}
-                      onClick={() => toggleOverlay("notes")}
-                    >
-                      {isMobileUi ? "Notes" : "Model notes"}
-                    </button>
-                  </div>
-                  <div className={isMobileUi && !mobileMenuOpen ? "scene-action-row scene-action-row-collapsed" : "scene-action-row"}>
-                    <button className="secondary-button" onClick={toggleSound}>
-                      {soundEnabled ? "Sound on" : "Sound off"}
-                    </button>
-                    <button className="secondary-button" onClick={tutorialVisible ? finishTutorial : startTutorial}>
-                      {tutorialVisible ? "Skip tutorial" : "Tutorial"}
-                    </button>
-                    <button className="secondary-button" onClick={restartMission}>
-                      Restart
-                    </button>
-                    <button className="secondary-button" onClick={() => setIsRunning(!isRunning)}>
-                      {isRunning ? "Pause" : "Resume"}
-                    </button>
-                    <button className="secondary-button" onClick={() => setViewportExpanded(false, true)}>
-                      Shrink
-                    </button>
-                    {!isEmbedded ? (
-                      <a
-                        className="secondary-button company-link-button"
-                        href="https://www.photonicinsecticides.com"
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Photonic insecticides
-                      </a>
-                    ) : null}
-                  </div>
+                  {actionMenuOpen ? (
+                    <div className="scene-action-menu">
+                      <div className="scene-action-row">
+                        <button
+                          className={activeOverlay === "setup" ? "camera-button active" : "camera-button"}
+                          data-tutorial-id="setup-button"
+                          onClick={() => {
+                            toggleOverlay("setup");
+                            setActionMenuOpen(false);
+                          }}
+                        >
+                          Setup
+                        </button>
+                        <button
+                          className={activeOverlay === "telemetry" ? "camera-button active" : "camera-button"}
+                          data-tutorial-id="telemetry-button"
+                          onClick={() => {
+                            toggleOverlay("telemetry");
+                            setActionMenuOpen(false);
+                          }}
+                        >
+                          {isMobileUi ? "Stats" : "Telemetry"}
+                        </button>
+                        <button
+                          className={activeOverlay === "report" ? "camera-button active" : "camera-button"}
+                          onClick={() => {
+                            toggleOverlay("report");
+                            setActionMenuOpen(false);
+                          }}
+                        >
+                          {isMobileUi ? "Report" : "Mission report"}
+                        </button>
+                        <button
+                          className={activeOverlay === "notes" ? "camera-button active" : "camera-button"}
+                          onClick={() => {
+                            toggleOverlay("notes");
+                            setActionMenuOpen(false);
+                          }}
+                        >
+                          {isMobileUi ? "Notes" : "Model notes"}
+                        </button>
+                      </div>
+                      <div className="scene-action-row">
+                        <button className="secondary-button" onClick={toggleSound}>
+                          {soundEnabled ? "Sound on" : "Sound off"}
+                        </button>
+                        <button
+                          className="secondary-button"
+                          onClick={() => {
+                            tutorialVisible ? finishTutorial() : startTutorial();
+                            setActionMenuOpen(false);
+                          }}
+                        >
+                          {tutorialVisible ? "Skip tutorial" : "Tutorial"}
+                        </button>
+                        <button className="secondary-button" onClick={restartMission}>
+                          Restart
+                        </button>
+                        <button className="secondary-button" onClick={() => setIsRunning(!isRunning)}>
+                          {isRunning ? "Pause" : "Resume"}
+                        </button>
+                        <button
+                          className="secondary-button"
+                          onClick={() => {
+                            setActionMenuOpen(false);
+                            setViewportExpanded(false, true);
+                          }}
+                        >
+                          Shrink
+                        </button>
+                        {!isEmbedded ? (
+                          <a
+                            className="secondary-button company-link-button"
+                            href="https://www.photonicinsecticides.com"
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            Photonic insecticides
+                          </a>
+                        ) : null}
+                      </div>
+                    </div>
+                  ) : null}
                 </>
               )
             ) : (
@@ -594,8 +851,9 @@ export default function App(): JSX.Element {
                 </div>
             )}
           </div>
+          ) : null}
 
-          {tutorialVisible && tutorialRect ? (
+          {tutorialVisible && tutorialRect && !safetyEditorActive ? (
             <div
               className={isMobileUi ? "tutorial-callout tutorial-callout-mobile" : "tutorial-callout"}
               style={{
@@ -632,9 +890,23 @@ export default function App(): JSX.Element {
           ) : null}
 
           {overlayContent ? (
-            <div className="scene-overlay-backdrop" onClick={() => setActiveOverlay(null)}>
-              <div className="scene-overlay-frame" onClick={(event) => event.stopPropagation()}>
-                <button className="overlay-close" onClick={() => setActiveOverlay(null)}>
+            <div
+              className={
+                activeOverlay === "safetyZone"
+                  ? "scene-overlay-backdrop scene-overlay-backdrop-safety"
+                  : "scene-overlay-backdrop"
+              }
+              onClick={closeOverlay}
+            >
+              <div
+                className={
+                  activeOverlay === "safetyZone"
+                    ? "scene-overlay-frame scene-overlay-frame-safety"
+                    : "scene-overlay-frame"
+                }
+                onClick={(event) => event.stopPropagation()}
+              >
+                <button className="overlay-close" onClick={closeOverlay}>
                   Close
                 </button>
                 {overlayContent}

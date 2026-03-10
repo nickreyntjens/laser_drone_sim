@@ -77,6 +77,7 @@ Visual/animation requirements:
 - all beetles must be visible from the beginning of the intro sequence; they should not pop into existence later
 - have the beetles visibly fall onto the field at the beginning of the simulation
 - add an option to hide all non-selected target markers and make that the default so the viewport is less cluttered
+- add moving farmers as realistic scale references in the field and block firing whenever a farmer is inside the nominal laser safety zone
 
 UI requirements:
 - Setup, telemetry, mission report, and model notes must be pop-up panels/dialogs.
@@ -115,6 +116,9 @@ Operational UX requirements:
 - When charging, show "Recharging for X minutes" and include a skip-recharging button for simulation convenience.
 - Add a firing-speed gate: the drone must slow to the configured maximum firing speed before the laser is allowed to fire, and the state machine must remain robust without getting stuck.
 - Yaw changes must not be instantaneous; the drone heading should slew with a realistic finite rate instead of snapping instantly to the new direction.
+- When a farmer is inside the nominal safety zone, show a clear "Farmer in NSZ" toast with an "Edit nominal safety zone" action.
+- The nominal safety zone editor should pause the mission, allow editing focal distance, starting aperture, laser power, and dwell time, provide a preview farmer-distance slider, and offer a mathematical explanation based on the Gaussian-beam calculator in https://github.com/nickreyntjens/laser_safety_calculator.py.
+- In that teaching mode, explain tradeoffs such as larger aperture needing a larger MEMS mirror and higher power permitting shorter dwell time for the same shot energy.
 - When the mission completes, show a prominent mission-complete toast or banner.
 - After one minute of watching the simulation, show a "Build it yourself" toast that opens a prompt explaining how to recreate the app.
 - In Model Notes, include a button that reveals or copies this full build prompt so any visitor can rebuild the app.

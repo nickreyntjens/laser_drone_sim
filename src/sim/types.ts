@@ -26,6 +26,9 @@ export interface SimulationParameters {
   showOnlySelectedTargetMarkers: boolean;
   edgeDensityPerHectare: number;
   gradientStrength: number;
+  farmersPerHectare: number;
+  safetyFocalDistanceM: number;
+  safetyStartingApertureMm: number;
   batteryCapacityWh: number;
   batteryCycleLife: number;
   batteryReplacementCostUsd: number;
@@ -71,6 +74,15 @@ export interface TargetState {
   engagementProgress: number;
   detectedAtS: number | null;
   neutralizedAtS: number | null;
+  blockedUntilS: number;
+}
+
+export interface FarmerState {
+  id: number;
+  position: Vec3;
+  headingRad: number;
+  heightM: number;
+  shoulderWidthM: number;
 }
 
 export interface MissionLogEvent {
@@ -86,6 +98,7 @@ export interface MissionLogEvent {
     | "target-neutralized"
     | "queue-pruned"
     | "reserve-return"
+    | "safety-hold"
     | "charging-start"
     | "charging-complete"
     | "stuck-warning"
@@ -168,8 +181,10 @@ export interface ChargeStatus {
 
 export interface SimulationSnapshot {
   params: SimulationParameters;
+  nominalSafetyZoneRadiusM: number;
   drone: DroneTelemetry;
   targets: TargetState[];
+  farmers: FarmerState[];
   metrics: MissionMetrics;
   chargeStatus: ChargeStatus | null;
   summary: MissionSummary | null;

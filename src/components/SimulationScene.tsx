@@ -1,5 +1,6 @@
 import { MutableRefObject, useLayoutEffect, useMemo, useRef } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import { Html } from "@react-three/drei";
 import { OrbitControls } from "@react-three/drei/core/OrbitControls";
 import { Line } from "@react-three/drei/core/Line";
 import { Sky } from "@react-three/drei/core/Sky";
@@ -7,10 +8,22 @@ import * as THREE from "three";
 import { clamp } from "../sim/defaults";
 import { MissionEngine } from "../sim/engine";
 import { getBeetleIntroVisualState } from "../sim/intro";
-import { SimulationSnapshot, TargetState, Vec3 } from "../sim/types";
+import {
+  estimatedDroneLengthM,
+  metersToSceneUnits,
+  nominalDroneModelScale,
+  NOMINAL_TARGET_MARKER_HEIGHT_M
+} from "../sim/rendering";
+import { FarmerState, SimulationSnapshot, TargetState, Vec3 } from "../sim/types";
 import { shouldRenderMarkerForTarget } from "../sim/visuals";
 
 export type CameraMode = "follow" | "overview" | "dock" | "manual";
+export interface SafetyEditorPreviewState {
+  previewFarmerDistanceM: number;
+  nominalSafetyZoneRadiusM: number;
+  farmerSelected: boolean;
+  onToggleFarmerSelection: () => void;
+}
 
 interface SimulationSceneProps {
   engineRef: MutableRefObject<MissionEngine>;
@@ -26,9 +39,12 @@ interface SimulationSceneProps {
   onPlaybackSpeedChange: (value: number) => void;
   cameraMode: CameraMode;
   onCameraModeChange: (mode: CameraMode) => void;
+  safetyEditorPreview: SafetyEditorPreviewState | null;
 }
 
 const DENSE_TARGET_RENDER_THRESHOLD = 900;
+const NOMINAL_SAFETY_ZONE_PERSIST_SECONDS = 0.55;
+const SAFETY_EDITOR_FLOOR_SIZE_UNITS = 8;
 
 function toScenePosition(point: Vec3, snapshot: SimulationSnapshot): THREE.Vector3 {
   const scale = snapshot.renderScaleMPerUnit;
@@ -75,23 +91,35 @@ function SceneCameraRig({
   const desiredPosition = useRef(new THREE.Vector3(10, 8, 10));
   const desiredTarget = useRef(new THREE.Vector3());
   const { camera } = useThree();
+  const fieldLength = snapshot.params.fieldLengthM / snapshot.renderScaleMPerUnit;
+  const fieldWidth = snapshot.params.fieldWidthM / snapshot.renderScaleMPerUnit;
+  const halfDiagonal = Math.sqrt(fieldLength * fieldLength + fieldWidth * fieldWidth) * 0.5;
+  const followDroneLength = metersToSceneUnits(
+    estimatedDroneLengthM(snapshot.params.droneMassKg),
+    snapshot.renderScaleMPerUnit
+  );
+  const manualMinDistance = Math.max(followDroneLength * 2.2, 0.45);
+  const manualMaxDistance = Math.max(halfDiagonal * 2.35, 65);
+  const manualPanSpeed = clamp(halfDiagonal / 18, 1.2, 3.2);
+  const manualZoomSpeed = 1.1;
+  const manualRotateSpeed = 0.7;
 
   useFrame((_state, delta) => {
     const engine = engineRef.current;
     const dronePoint = toScenePosition(engine.drone.position, snapshot);
     const dockPoint = toScenePosition(snapshot.dockPosition, snapshot);
-    const fieldLength = snapshot.params.fieldLengthM / snapshot.renderScaleMPerUnit;
-    const fieldWidth = snapshot.params.fieldWidthM / snapshot.renderScaleMPerUnit;
-    const halfDiagonal = Math.sqrt(fieldLength * fieldLength + fieldWidth * fieldWidth) * 0.5;
 
     if (cameraMode === "follow") {
       const heading = engine.drone.headingRad;
       const back = new THREE.Vector3(-Math.cos(heading), 0, -Math.sin(heading));
-      desiredTarget.current.copy(dronePoint).add(new THREE.Vector3(0, 0.35, 0));
+      const followDistance = clamp(followDroneLength * 8.4, 1.45, 2.5);
+      const followHeight = clamp(followDroneLength * 4.6, 0.8, 1.28);
+      const lateralOffset = clamp(followDroneLength * 2.6, 0.42, 0.72);
+      desiredTarget.current.copy(dronePoint).add(new THREE.Vector3(0, followDroneLength * 0.9, 0));
       desiredPosition.current
         .copy(dronePoint)
-        .add(back.multiplyScalar(3.6))
-        .add(new THREE.Vector3(0, 2.15, 2.25));
+        .add(back.multiplyScalar(followDistance))
+        .add(new THREE.Vector3(0, followHeight, lateralOffset));
     } else if (cameraMode === "dock") {
       desiredTarget.current.set(0, 0.5, 0);
       desiredPosition.current.copy(dockPoint).add(new THREE.Vector3(-2.2, 3.1, 6.2));
@@ -126,9 +154,16 @@ function SceneCameraRig({
       enablePan={cameraMode === "manual"}
       enableRotate
       enableZoom
+      enableDamping
+      dampingFactor={0.08}
+      screenSpacePanning
+      zoomSpeed={manualZoomSpeed}
+      panSpeed={manualPanSpeed}
+      rotateSpeed={manualRotateSpeed}
       maxPolarAngle={Math.PI * 0.48}
-      minDistance={4}
-      maxDistance={30}
+      minPolarAngle={0.1}
+      minDistance={manualMinDistance}
+      maxDistance={manualMaxDistance}
       target={[0, 0.4, 0]}
     />
   );
@@ -232,7 +267,7 @@ function CropCanopy({ snapshot }: { snapshot: SimulationSnapshot }): JSX.Element
 
         points.push({
           position: [point.x, point.y, point.z],
-          scale: [0.11 + n1 * 0.12, 0.06 + n2 * 0.05, 0.13 + n2 * 0.09],
+          scale: [0.04 + n1 * 0.035, 0.022 + n2 * 0.02, 0.05 + n2 * 0.04],
           rotationY: n2 * Math.PI
         });
       }
@@ -310,172 +345,201 @@ function DockActor({
 }): JSX.Element {
   const dock = toScenePosition(snapshot.dockPosition, snapshot);
   const glow = charging ? "#79dcb4" : "#f2bf6d";
+  const padRadius = metersToSceneUnits(0.95, snapshot.renderScaleMPerUnit);
+  const padThickness = metersToSceneUnits(0.08, snapshot.renderScaleMPerUnit);
+  const ringInnerRadius = metersToSceneUnits(0.55, snapshot.renderScaleMPerUnit);
+  const ringOuterRadius = metersToSceneUnits(0.75, snapshot.renderScaleMPerUnit);
+  const cabinetSize: [number, number, number] = [
+    metersToSceneUnits(0.55, snapshot.renderScaleMPerUnit),
+    metersToSceneUnits(0.7, snapshot.renderScaleMPerUnit),
+    metersToSceneUnits(0.46, snapshot.renderScaleMPerUnit)
+  ];
+  const mastSize: [number, number, number] = [
+    metersToSceneUnits(0.16, snapshot.renderScaleMPerUnit),
+    metersToSceneUnits(0.45, snapshot.renderScaleMPerUnit),
+    metersToSceneUnits(0.16, snapshot.renderScaleMPerUnit)
+  ];
+  const statusLightSize: [number, number, number] = [
+    metersToSceneUnits(0.08, snapshot.renderScaleMPerUnit),
+    metersToSceneUnits(0.08, snapshot.renderScaleMPerUnit),
+    metersToSceneUnits(0.05, snapshot.renderScaleMPerUnit)
+  ];
 
   return (
     <group position={[dock.x, dock.y, dock.z]}>
       <mesh receiveShadow castShadow position={[0, 0.04, 0]}>
-        <cylinderGeometry args={[0.72, 0.82, 0.08, 32]} />
+        <cylinderGeometry args={[padRadius, padRadius * 1.08, padThickness, 32]} />
         <meshStandardMaterial color="#2b3638" metalness={0.45} roughness={0.5} />
       </mesh>
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.08, 0]}>
-        <ringGeometry args={[0.45, 0.66, 32]} />
+        <ringGeometry args={[ringInnerRadius, ringOuterRadius, 32]} />
         <meshBasicMaterial color={glow} transparent opacity={0.75} />
       </mesh>
-      <mesh castShadow receiveShadow position={[-0.95, 0.36, 0]}>
-        <boxGeometry args={[0.48, 0.62, 0.42]} />
+      <mesh castShadow receiveShadow position={[-padRadius - cabinetSize[0] * 0.9, cabinetSize[1] * 0.5, 0]}>
+        <boxGeometry args={cabinetSize} />
         <meshStandardMaterial color="#424d52" metalness={0.35} roughness={0.52} />
       </mesh>
-      <mesh castShadow position={[-0.95, 0.83, 0]}>
-        <boxGeometry args={[0.18, 0.38, 0.18]} />
+      <mesh castShadow position={[-padRadius - cabinetSize[0] * 0.9, cabinetSize[1] + mastSize[1] * 0.5, 0]}>
+        <boxGeometry args={mastSize} />
         <meshStandardMaterial color="#5d6c74" metalness={0.4} roughness={0.38} />
       </mesh>
-      <mesh position={[-0.95, 0.83, 0.11]}>
-        <boxGeometry args={[0.08, 0.08, 0.05]} />
+      <mesh
+        position={[
+          -padRadius - cabinetSize[0] * 0.9,
+          cabinetSize[1] + mastSize[1] * 0.5,
+          statusLightSize[2] * 0.55 + mastSize[2] * 0.5
+        ]}
+      >
+        <boxGeometry args={statusLightSize} />
         <meshBasicMaterial color={glow} />
       </mesh>
     </group>
   );
 }
 
-function SearchFootprint({
-  engineRef,
-  snapshot
-}: {
-  engineRef: MutableRefObject<MissionEngine>;
-  snapshot: SimulationSnapshot;
-}): JSX.Element {
-  const ringRef = useRef<THREE.Mesh>(null);
-
-  useFrame(({ clock }) => {
-    if (!ringRef.current) {
-      return;
-    }
-
-    const engine = engineRef.current;
-    const point = toScenePosition(engine.drone.position, snapshot);
-    ringRef.current.visible = engine.drone.mode === "searching";
-    ringRef.current.position.set(point.x, 0.025, point.z);
-    const pulse = 1 + Math.sin(clock.elapsedTime * 2.8) * 0.04;
-    ringRef.current.scale.setScalar(pulse);
-  });
+function ReferenceActors({ snapshot }: { snapshot: SimulationSnapshot }): JSX.Element {
+  const serviceLaneCenter = toScenePosition(
+    {
+      x: -5.5,
+      y: 0.01,
+      z: snapshot.params.fieldWidthM * 0.5
+    },
+    snapshot
+  );
+  const carPoint = toScenePosition(
+    {
+      x: -4.2,
+      y: 0.02,
+      z: snapshot.params.fieldWidthM * 0.5 - 8.5
+    },
+    snapshot
+  );
+  const laneSize: [number, number, number] = [
+    metersToSceneUnits(9.5, snapshot.renderScaleMPerUnit),
+    metersToSceneUnits(0.03, snapshot.renderScaleMPerUnit),
+    metersToSceneUnits(22, snapshot.renderScaleMPerUnit)
+  ];
+  const carLength = metersToSceneUnits(4.6, snapshot.renderScaleMPerUnit);
+  const carWidth = metersToSceneUnits(1.82, snapshot.renderScaleMPerUnit);
+  const carHeight = metersToSceneUnits(1.58, snapshot.renderScaleMPerUnit);
+  const wheelRadius = metersToSceneUnits(0.33, snapshot.renderScaleMPerUnit);
+  const wheelThickness = metersToSceneUnits(0.18, snapshot.renderScaleMPerUnit);
 
   return (
-    <mesh ref={ringRef} rotation={[-Math.PI / 2, 0, 0]}>
-      <ringGeometry
-        args={[
-          snapshot.params.detectionRadiusM / snapshot.renderScaleMPerUnit * 0.82,
-          snapshot.params.detectionRadiusM / snapshot.renderScaleMPerUnit,
-          48
-        ]}
-      />
-      <meshBasicMaterial color="#8eddb6" transparent opacity={0.24} depthWrite={false} />
-    </mesh>
+    <group>
+      <mesh position={[serviceLaneCenter.x, 0, serviceLaneCenter.z]} receiveShadow>
+        <boxGeometry args={laneSize} />
+        <meshStandardMaterial color="#5d615e" roughness={0.94} />
+      </mesh>
+
+      <group position={[carPoint.x, 0, carPoint.z]} rotation={[0, Math.PI / 2, 0]}>
+        <mesh castShadow receiveShadow position={[0, wheelRadius + carHeight * 0.28, 0]}>
+          <boxGeometry args={[carLength, carHeight * 0.52, carWidth]} />
+          <meshStandardMaterial color="#c9d2d7" metalness={0.42} roughness={0.34} />
+        </mesh>
+        <mesh castShadow receiveShadow position={[0, wheelRadius + carHeight * 0.62, 0]}>
+          <boxGeometry args={[carLength * 0.48, carHeight * 0.44, carWidth * 0.86]} />
+          <meshStandardMaterial color="#dfe6ea" metalness={0.38} roughness={0.3} />
+        </mesh>
+        {[
+          [carLength * 0.32, wheelRadius, carWidth * 0.42],
+          [-carLength * 0.32, wheelRadius, carWidth * 0.42],
+          [carLength * 0.32, wheelRadius, -carWidth * 0.42],
+          [-carLength * 0.32, wheelRadius, -carWidth * 0.42]
+        ].map((position, index) => (
+          <mesh
+            key={index}
+            castShadow
+            receiveShadow
+            rotation={[Math.PI / 2, 0, 0]}
+            position={position as [number, number, number]}
+          >
+            <cylinderGeometry args={[wheelRadius, wheelRadius, wheelThickness, 18]} />
+            <meshStandardMaterial color="#1f2427" roughness={0.82} />
+          </mesh>
+        ))}
+      </group>
+    </group>
   );
 }
 
-function LaserBeam({
-  engineRef,
-  snapshot
+function FarmerActor({
+  farmer,
+  snapshot,
+  shirtColor = "#506f8d",
+  legColor = "#3c464c"
 }: {
-  engineRef: MutableRefObject<MissionEngine>;
+  farmer: FarmerState;
   snapshot: SimulationSnapshot;
+  shirtColor?: string;
+  legColor?: string;
 }): JSX.Element {
-  const beamRef = useRef<THREE.Mesh>(null);
-  const impactRef = useRef<THREE.Mesh>(null);
-  const start = useMemo(() => new THREE.Vector3(), []);
-  const end = useMemo(() => new THREE.Vector3(), []);
-  const direction = useMemo(() => new THREE.Vector3(), []);
-  const midpoint = useMemo(() => new THREE.Vector3(), []);
-
-  useFrame(({ clock }) => {
-    if (!beamRef.current || !impactRef.current) {
-      return;
-    }
-
-    const engine = engineRef.current;
-    const targetId = engine.drone.activeTargetId;
-    const target = targetId !== null ? engine.targets[targetId] : null;
-    const visible = engine.drone.mode === "firing" && !!target && target.alive;
-
-    beamRef.current.visible = visible;
-    impactRef.current.visible = visible;
-
-    if (!visible || !target) {
-      return;
-    }
-
-    start.copy(toScenePosition(engine.drone.position, snapshot)).add(new THREE.Vector3(0, 0.02, 0));
-    end.copy(toScenePosition(target.position, snapshot)).add(new THREE.Vector3(0, 0.03, 0));
-    direction.subVectors(end, start);
-    const length = direction.length();
-    midpoint.copy(start).addScaledVector(direction, 0.5);
-
-    beamRef.current.position.copy(midpoint);
-    beamRef.current.scale.set(1, length, 1);
-    beamRef.current.quaternion.setFromUnitVectors(
-      new THREE.Vector3(0, 1, 0),
-      direction.normalize()
-    );
-
-    impactRef.current.position.copy(end);
-    const pulse = 0.8 + Math.sin(clock.elapsedTime * 24) * 0.15;
-    impactRef.current.scale.setScalar(pulse);
-  });
+  const point = toScenePosition(farmer.position, snapshot);
+  const farmerHeight = metersToSceneUnits(farmer.heightM, snapshot.renderScaleMPerUnit);
+  const farmerShoulderWidth = metersToSceneUnits(farmer.shoulderWidthM, snapshot.renderScaleMPerUnit);
 
   return (
-    <>
-      <mesh ref={beamRef} visible={false}>
-        <cylinderGeometry args={[0.014, 0.026, 1, 12, 1, true]} />
-        <meshBasicMaterial color="#ff6a4d" transparent opacity={0.78} depthWrite={false} />
+    <group position={[point.x, point.y, point.z]} rotation={[0, -farmer.headingRad + Math.PI * 0.5, 0]}>
+      <mesh castShadow position={[0, farmerHeight * 0.5, 0]}>
+        <cylinderGeometry
+          args={[
+            farmerShoulderWidth * 0.24,
+            farmerShoulderWidth * 0.28,
+            farmerHeight * 0.36,
+            12
+          ]}
+        />
+        <meshStandardMaterial color={shirtColor} roughness={0.78} />
       </mesh>
-      <mesh ref={impactRef} visible={false}>
-        <sphereGeometry args={[0.06, 18, 18]} />
-        <meshBasicMaterial color="#ffd08a" transparent opacity={0.95} depthWrite={false} />
+      <mesh castShadow position={[0, farmerHeight * 0.84, 0]}>
+        <sphereGeometry args={[farmerHeight * 0.09, 12, 12]} />
+        <meshStandardMaterial color="#d0b191" roughness={0.92} />
       </mesh>
-    </>
+      {[-1, 1].map((side) => (
+        <mesh key={side} castShadow position={[farmerShoulderWidth * 0.12 * side, farmerHeight * 0.2, 0]}>
+          <cylinderGeometry args={[farmerShoulderWidth * 0.06, farmerShoulderWidth * 0.07, farmerHeight * 0.42, 10]} />
+          <meshStandardMaterial color={legColor} roughness={0.84} />
+        </mesh>
+      ))}
+    </group>
   );
 }
 
-function DroneActor({
-  engineRef,
-  snapshot
+function WalkingFarmers({ snapshot }: { snapshot: SimulationSnapshot }): JSX.Element {
+  return (
+    <group>
+      {snapshot.farmers.map((farmer) => (
+        <FarmerActor key={farmer.id} farmer={farmer} snapshot={snapshot} />
+      ))}
+    </group>
+  );
+}
+
+function DroneVisual({
+  droneScale,
+  rotorSpinScale = 1,
+  bodyColor = "#d8e0e3"
 }: {
-  engineRef: MutableRefObject<MissionEngine>;
-  snapshot: SimulationSnapshot;
+  droneScale: number;
+  rotorSpinScale?: number;
+  bodyColor?: string;
 }): JSX.Element {
-  const groupRef = useRef<THREE.Group>(null);
   const rotorsRef = useRef<Array<THREE.Mesh | null>>([]);
-  const targetPosition = useMemo(() => new THREE.Vector3(), []);
 
-  useFrame(({ clock }, delta) => {
-    if (!groupRef.current) {
-      return;
-    }
-
-    const engine = engineRef.current;
-    const drone = engine.drone;
-    const scenePoint = toScenePosition(drone.position, snapshot);
-    targetPosition.copy(scenePoint);
-    targetPosition.y += Math.sin(clock.elapsedTime * 7.4) * 0.004;
-    groupRef.current.position.lerp(targetPosition, 1 - Math.exp(-delta * 12));
-    groupRef.current.rotation.order = "YXZ";
-    groupRef.current.rotation.y = -drone.headingRad + Math.PI * 0.5;
-    groupRef.current.rotation.x = drone.pitchRad;
-    groupRef.current.rotation.z = drone.rollRad;
-
+  useFrame((_state, delta) => {
     for (let index = 0; index < rotorsRef.current.length; index += 1) {
       const rotor = rotorsRef.current[index];
       if (rotor) {
-        rotor.rotation.y += delta * 35;
+        rotor.rotation.y += delta * 35 * rotorSpinScale;
       }
     }
   });
 
   return (
-    <group ref={groupRef}>
+    <group scale={[droneScale, droneScale, droneScale]}>
       <mesh castShadow receiveShadow position={[0, 0.18, 0]}>
         <boxGeometry args={[0.46, 0.1, 0.28]} />
-        <meshStandardMaterial color="#d8e0e3" metalness={0.72} roughness={0.28} />
+        <meshStandardMaterial color={bodyColor} metalness={0.72} roughness={0.28} />
       </mesh>
       <mesh castShadow receiveShadow position={[0, 0.09, 0]}>
         <cylinderGeometry args={[0.12, 0.16, 0.18, 24]} />
@@ -536,6 +600,483 @@ function DroneActor({
         <cylinderGeometry args={[0.012, 0.012, 0.48, 12]} />
         <meshStandardMaterial color="#44525b" metalness={0.38} roughness={0.46} />
       </mesh>
+    </group>
+  );
+}
+
+function SafetyEditorPreview({
+  snapshot,
+  preview
+}: {
+  snapshot: SimulationSnapshot;
+  preview: SafetyEditorPreviewState;
+}): JSX.Element {
+  const { camera, size } = useThree();
+  const droneScale = nominalDroneModelScale(
+    snapshot.params.droneMassKg,
+    snapshot.renderScaleMPerUnit
+  );
+  const droneHoverHeight = metersToSceneUnits(snapshot.params.engageAltitudeM, snapshot.renderScaleMPerUnit);
+  const farmerDistanceUnits = metersToSceneUnits(
+    preview.previewFarmerDistanceM,
+    snapshot.renderScaleMPerUnit
+  );
+  const actualDistanceM = preview.previewFarmerDistanceM;
+  const insideNominalSafetyZone = actualDistanceM <= preview.nominalSafetyZoneRadiusM;
+  const groundInnerRadius = metersToSceneUnits(0.18, snapshot.renderScaleMPerUnit);
+  const groundOuterRadius = metersToSceneUnits(0.3, snapshot.renderScaleMPerUnit);
+  const farmerPosition: [number, number, number] = [farmerDistanceUnits, 0, 0];
+  const lineY = droneHoverHeight * 0.56;
+  const nominalRadiusSceneUnits = metersToSceneUnits(
+    preview.nominalSafetyZoneRadiusM,
+    snapshot.renderScaleMPerUnit
+  );
+  const farmerHeight = metersToSceneUnits(1.78, snapshot.renderScaleMPerUnit);
+  const farmerShoulderWidth = metersToSceneUnits(0.48, snapshot.renderScaleMPerUnit);
+  const farmerWarningMessage = insideNominalSafetyZone
+    ? `Farmer in NSZ: ${actualDistanceM.toFixed(1)} m from the beam, inside the ${preview.nominalSafetyZoneRadiusM.toFixed(1)} m nominal safety zone.`
+    : `Farmer clear: ${actualDistanceM.toFixed(1)} m from the beam, outside the ${preview.nominalSafetyZoneRadiusM.toFixed(1)} m nominal safety zone.`;
+
+  useFrame(() => {
+    if (!shouldExposeVisualTestState() || typeof window === "undefined") {
+      return;
+    }
+
+    const projected = new THREE.Vector3(
+      farmerPosition[0],
+      farmerHeight * 0.5,
+      farmerPosition[2]
+    ).project(camera);
+
+    (window as Window & { __PHOTONIC_SAFETY_PREVIEW__?: Record<string, number> }).__PHOTONIC_SAFETY_PREVIEW__ =
+      {
+        farmerScreenX: ((projected.x + 1) * 0.5) * size.width,
+        farmerScreenY: ((1 - projected.y) * 0.5) * size.height
+      };
+  });
+
+  return (
+    <group>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.015, 0]} receiveShadow>
+        <planeGeometry args={[SAFETY_EDITOR_FLOOR_SIZE_UNITS, SAFETY_EDITOR_FLOOR_SIZE_UNITS]} />
+        <meshStandardMaterial color="#071311" roughness={0.98} metalness={0.08} />
+      </mesh>
+      <gridHelper
+        args={[SAFETY_EDITOR_FLOOR_SIZE_UNITS, 32, "#3bd4a0", "#12392f"]}
+        position={[0, 0.001, 0]}
+      />
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.002, 0]}>
+        <ringGeometry args={[nominalRadiusSceneUnits * 0.98, nominalRadiusSceneUnits, 96]} />
+        <meshBasicMaterial color="#ff8a61" transparent opacity={0.78} depthWrite={false} />
+      </mesh>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.001, 0]}>
+        <circleGeometry args={[nominalRadiusSceneUnits, 96]} />
+        <meshBasicMaterial color="#ff7b5c" transparent opacity={0.08} depthWrite={false} />
+      </mesh>
+      <Line
+        points={[
+          [0, lineY, 0],
+          [farmerPosition[0], lineY, farmerPosition[2]]
+        ]}
+        color={insideNominalSafetyZone ? "#ff8a61" : "#7ad7b1"}
+        transparent
+        opacity={0.78}
+        lineWidth={1.5}
+      />
+      <group position={[0, droneHoverHeight, 0]} rotation={[0, Math.PI * 0.35, 0]}>
+        <DroneVisual
+          droneScale={droneScale}
+          rotorSpinScale={0.75}
+          bodyColor={insideNominalSafetyZone ? "#d7dde1" : "#d4ece4"}
+        />
+      </group>
+      <group position={farmerPosition} rotation={[0, Math.PI, 0]}>
+        <mesh position={[0, farmerHeight * 0.46, 0]}>
+          <cylinderGeometry
+            args={[
+              farmerShoulderWidth * 0.42,
+              farmerShoulderWidth * 0.46,
+              farmerHeight * 1.05,
+              16
+            ]}
+          />
+          <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+        </mesh>
+        <Html
+          position={[0, farmerHeight * 0.56, 0]}
+          center
+          transform={false}
+          occlude={false}
+        >
+          <div className="safety-farmer-hitbox" />
+        </Html>
+        <mesh castShadow position={[0, farmerHeight * 0.5, 0]}>
+          <cylinderGeometry
+            args={[
+              farmerShoulderWidth * 0.24,
+              farmerShoulderWidth * 0.28,
+              farmerHeight * 0.36,
+              12
+            ]}
+          />
+          <meshStandardMaterial
+            color={insideNominalSafetyZone ? "#8b4a3e" : "#3f725b"}
+            roughness={0.78}
+          />
+        </mesh>
+        <mesh castShadow position={[0, farmerHeight * 0.84, 0]}>
+          <sphereGeometry args={[farmerHeight * 0.09, 12, 12]} />
+          <meshStandardMaterial color="#d0b191" roughness={0.92} />
+        </mesh>
+        {[-1, 1].map((side) => (
+          <mesh
+            key={side}
+            castShadow
+            position={[farmerShoulderWidth * 0.12 * side, farmerHeight * 0.2, 0]}
+          >
+            <cylinderGeometry
+              args={[
+                farmerShoulderWidth * 0.06,
+                farmerShoulderWidth * 0.07,
+                farmerHeight * 0.42,
+                10
+              ]}
+            />
+            <meshStandardMaterial
+              color={insideNominalSafetyZone ? "#3d2620" : "#263630"}
+              roughness={0.84}
+            />
+          </mesh>
+        ))}
+        <Html
+          position={[0, farmerHeight + metersToSceneUnits(0.38, snapshot.renderScaleMPerUnit), 0]}
+          center
+          transform={false}
+          occlude={false}
+        >
+          <div
+            className={`safety-farmer-bubble${
+              insideNominalSafetyZone ? " safety-farmer-bubble-warn" : " safety-farmer-bubble-clear"
+            }`}
+          >
+            <strong>{insideNominalSafetyZone ? "Farmer in NSZ" : "Farmer clear"}</strong>
+            <span>{farmerWarningMessage}</span>
+            <em>Farmer metrics remain visible at right.</em>
+          </div>
+        </Html>
+      </group>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[farmerPosition[0], 0.02, farmerPosition[2]]}>
+        <ringGeometry args={[groundInnerRadius, groundOuterRadius, 32]} />
+        <meshBasicMaterial
+          color={insideNominalSafetyZone ? "#ff8a61" : "#7ad7b1"}
+          transparent
+          opacity={0.88}
+          depthWrite={false}
+        />
+      </mesh>
+      {[-1.8, -0.8, 0.9, 1.9].map((x, index) => (
+        <mesh key={index} position={[x, 0.8 + index * 0.12, -2.2 + index * 0.4]}>
+          <boxGeometry args={[0.03, 1.6 + index * 0.2, 0.03]} />
+          <meshBasicMaterial color={index % 2 === 0 ? "#2ce29f" : "#0d8b67"} transparent opacity={0.38} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+function SafetyEditorCameraRig({
+  snapshot,
+  preview
+}: {
+  snapshot: SimulationSnapshot;
+  preview: SafetyEditorPreviewState;
+}): JSX.Element {
+  const controlsRef = useRef<any>(null);
+  const { camera } = useThree();
+  const safetyRadiusSceneUnits = metersToSceneUnits(
+    preview.nominalSafetyZoneRadiusM,
+    snapshot.renderScaleMPerUnit
+  );
+
+  useLayoutEffect(() => {
+    const target = new THREE.Vector3(
+      Math.min(safetyRadiusSceneUnits * 0.28, 0.35),
+      metersToSceneUnits(snapshot.params.engageAltitudeM, snapshot.renderScaleMPerUnit) * 0.62,
+      0
+    );
+    const position = new THREE.Vector3(
+      Math.max(1.9, safetyRadiusSceneUnits * 1.25),
+      Math.max(1.35, safetyRadiusSceneUnits * 1.1),
+      Math.max(2.3, safetyRadiusSceneUnits * 1.9)
+    );
+    camera.position.copy(position);
+    camera.lookAt(target);
+    if (controlsRef.current) {
+      controlsRef.current.target.copy(target);
+      controlsRef.current.update();
+    }
+  }, [camera, safetyRadiusSceneUnits, snapshot.params.engageAltitudeM, snapshot.renderScaleMPerUnit]);
+
+  return (
+    <OrbitControls
+      ref={controlsRef}
+      enablePan
+      enableRotate
+      enableZoom
+      enableDamping
+      dampingFactor={0.08}
+      screenSpacePanning
+      rotateSpeed={0.8}
+      panSpeed={1.2}
+      zoomSpeed={1}
+      minPolarAngle={0.15}
+      maxPolarAngle={Math.PI * 0.48}
+      minDistance={1.2}
+      maxDistance={8}
+      target={[
+        Math.min(safetyRadiusSceneUnits * 0.28, 0.35),
+        metersToSceneUnits(snapshot.params.engageAltitudeM, snapshot.renderScaleMPerUnit) * 0.62,
+        0
+      ]}
+    />
+  );
+}
+
+function SearchFootprint({
+  engineRef,
+  snapshot
+}: {
+  engineRef: MutableRefObject<MissionEngine>;
+  snapshot: SimulationSnapshot;
+}): JSX.Element {
+  const ringRef = useRef<THREE.Mesh>(null);
+
+  useFrame(({ clock }, delta) => {
+    if (!ringRef.current) {
+      return;
+    }
+
+    const engine = engineRef.current;
+    const point = toScenePosition(engine.drone.position, snapshot);
+    ringRef.current.visible = engine.drone.mode === "searching";
+    ringRef.current.position.set(point.x, 0.025, point.z);
+    const pulse = 1 + Math.sin(clock.elapsedTime * 2.8) * 0.04;
+    ringRef.current.scale.setScalar(pulse);
+  });
+
+  return (
+    <mesh ref={ringRef} rotation={[-Math.PI / 2, 0, 0]}>
+      <ringGeometry
+        args={[
+          snapshot.params.detectionRadiusM / snapshot.renderScaleMPerUnit * 0.82,
+          snapshot.params.detectionRadiusM / snapshot.renderScaleMPerUnit,
+          48
+        ]}
+      />
+      <meshBasicMaterial color="#8eddb6" transparent opacity={0.24} depthWrite={false} />
+    </mesh>
+  );
+}
+
+function LaserBeam({
+  engineRef,
+  snapshot
+}: {
+  engineRef: MutableRefObject<MissionEngine>;
+  snapshot: SimulationSnapshot;
+}): JSX.Element {
+  const beamRef = useRef<THREE.Mesh>(null);
+  const impactRef = useRef<THREE.Mesh>(null);
+  const start = useMemo(() => new THREE.Vector3(), []);
+  const end = useMemo(() => new THREE.Vector3(), []);
+  const direction = useMemo(() => new THREE.Vector3(), []);
+  const midpoint = useMemo(() => new THREE.Vector3(), []);
+  const beamInnerRadius = metersToSceneUnits(0.012, snapshot.renderScaleMPerUnit);
+  const beamOuterRadius = metersToSceneUnits(0.022, snapshot.renderScaleMPerUnit);
+  const impactRadius = metersToSceneUnits(0.09, snapshot.renderScaleMPerUnit);
+
+  useFrame(({ clock }, delta) => {
+    if (!beamRef.current || !impactRef.current) {
+      return;
+    }
+
+    const engine = engineRef.current;
+    const targetId = engine.drone.activeTargetId;
+    const target = targetId !== null ? engine.targets[targetId] : null;
+    const visible = engine.drone.mode === "firing" && !!target && target.alive;
+
+    beamRef.current.visible = visible;
+    impactRef.current.visible = visible;
+
+    if (!visible || !target) {
+      return;
+    }
+
+    start.copy(toScenePosition(engine.drone.position, snapshot)).add(new THREE.Vector3(0, 0.02, 0));
+    end.copy(toScenePosition(target.position, snapshot)).add(new THREE.Vector3(0, 0.03, 0));
+    direction.subVectors(end, start);
+    const length = direction.length();
+    midpoint.copy(start).addScaledVector(direction, 0.5);
+
+    beamRef.current.position.copy(midpoint);
+    beamRef.current.scale.set(1, length, 1);
+    beamRef.current.quaternion.setFromUnitVectors(
+      new THREE.Vector3(0, 1, 0),
+      direction.normalize()
+    );
+
+    impactRef.current.position.copy(end);
+    const pulse = 0.8 + Math.sin(clock.elapsedTime * 24) * 0.15;
+    impactRef.current.scale.setScalar(pulse);
+  });
+
+  return (
+    <>
+      <mesh ref={beamRef} visible={false}>
+        <cylinderGeometry args={[beamInnerRadius, beamOuterRadius, 1, 12, 1, true]} />
+        <meshBasicMaterial color="#ff6a4d" transparent opacity={0.78} depthWrite={false} />
+      </mesh>
+      <mesh ref={impactRef} visible={false}>
+        <sphereGeometry args={[impactRadius, 18, 18]} />
+        <meshBasicMaterial color="#ffd08a" transparent opacity={0.95} depthWrite={false} />
+      </mesh>
+    </>
+  );
+}
+
+function LaserSafetyZone({
+  engineRef,
+  snapshot,
+  safetyEditorPreview
+}: {
+  engineRef: MutableRefObject<MissionEngine>;
+  snapshot: SimulationSnapshot;
+  safetyEditorPreview: SafetyEditorPreviewState | null;
+}): JSX.Element {
+  const groupRef = useRef<THREE.Group>(null);
+  const shellRef = useRef<THREE.Mesh>(null);
+  const ringRef = useRef<THREE.Mesh>(null);
+  const pulseRef = useRef<THREE.Mesh>(null);
+  const fillRef = useRef<THREE.Mesh>(null);
+  const groundPoint = useRef(new THREE.Vector3());
+  const tempPoint = useMemo(() => new THREE.Vector3(), []);
+  const lastActiveTimeRef = useRef<number>(-NOMINAL_SAFETY_ZONE_PERSIST_SECONDS);
+  const nominalRadiusSceneUnits = metersToSceneUnits(
+    safetyEditorPreview?.nominalSafetyZoneRadiusM ?? snapshot.nominalSafetyZoneRadiusM,
+    snapshot.renderScaleMPerUnit
+  );
+
+  useFrame(({ clock }, delta) => {
+    if (!groupRef.current || !shellRef.current || !ringRef.current || !pulseRef.current || !fillRef.current) {
+      return;
+    }
+
+    const engine = engineRef.current;
+    const showingEditorPreview = safetyEditorPreview !== null;
+    const isFiring = engine.drone.mode === "firing" && engine.drone.activeTargetId !== null;
+    const now = clock.elapsedTime;
+
+    if (showingEditorPreview || isFiring) {
+      tempPoint.copy(toScenePosition(engine.drone.position, snapshot));
+      groundPoint.current.set(tempPoint.x, 0.03, tempPoint.z);
+      if (isFiring) {
+        lastActiveTimeRef.current = now;
+      }
+    }
+
+    const secondsSinceActive = now - lastActiveTimeRef.current;
+    const tailFade = 1 - clamp(secondsSinceActive / NOMINAL_SAFETY_ZONE_PERSIST_SECONDS, 0, 1);
+    const visible = showingEditorPreview || isFiring || tailFade > 0.01;
+
+    groupRef.current.visible = visible;
+    if (!visible) {
+      return;
+    }
+
+    groupRef.current.position.copy(groundPoint.current);
+    groupRef.current.rotation.y += delta * 0.7;
+
+    const firingPulse = 0.5 + 0.5 * Math.sin(now * 7.5);
+    const pulseStrength = showingEditorPreview
+      ? 0.66 + firingPulse * 0.18
+      : isFiring
+        ? 0.72 + firingPulse * 0.28
+        : tailFade;
+    const shellOpacity = 0.06 + pulseStrength * 0.08;
+    const ringOpacity = 0.16 + pulseStrength * 0.28;
+    const fillOpacity = 0.045 + pulseStrength * 0.06;
+    const pulseScale =
+      showingEditorPreview || isFiring
+        ? 0.92 + firingPulse * 0.12
+        : 1 + (1 - tailFade) * 0.18;
+
+    shellRef.current.scale.setScalar(1 + pulseStrength * 0.02);
+    ringRef.current.scale.setScalar(1);
+    pulseRef.current.scale.setScalar(pulseScale);
+
+    (shellRef.current.material as THREE.MeshBasicMaterial).opacity = shellOpacity;
+    (ringRef.current.material as THREE.MeshBasicMaterial).opacity = ringOpacity;
+    (pulseRef.current.material as THREE.MeshBasicMaterial).opacity = ringOpacity * 0.72 * tailFade;
+    (fillRef.current.material as THREE.MeshBasicMaterial).opacity = fillOpacity;
+  });
+
+  return (
+    <group ref={groupRef} visible={false}>
+      {/* Nominal visual keep-out radius for reflected beam hazard; this is not a full eye-safety model. */}
+      <mesh ref={fillRef} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.004, 0]}>
+        <circleGeometry args={[nominalRadiusSceneUnits, 48]} />
+        <meshBasicMaterial color="#ff7b5c" transparent opacity={0.08} depthWrite={false} />
+      </mesh>
+      <mesh ref={shellRef} position={[0, 0.2, 0]}>
+        <cylinderGeometry args={[nominalRadiusSceneUnits, nominalRadiusSceneUnits, 0.4, 64, 1, true]} />
+        <meshBasicMaterial color="#ff8657" transparent opacity={0.12} depthWrite={false} side={THREE.DoubleSide} />
+      </mesh>
+      <mesh ref={ringRef} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.015, 0]}>
+        <ringGeometry args={[nominalRadiusSceneUnits * 0.95, nominalRadiusSceneUnits, 64]} />
+        <meshBasicMaterial color="#ffb086" transparent opacity={0.34} depthWrite={false} />
+      </mesh>
+      <mesh ref={pulseRef} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.02, 0]}>
+        <ringGeometry args={[nominalRadiusSceneUnits * 0.78, nominalRadiusSceneUnits * 0.88, 64]} />
+        <meshBasicMaterial color="#ffd8a8" transparent opacity={0.26} depthWrite={false} />
+      </mesh>
+    </group>
+  );
+}
+
+function DroneActor({
+  engineRef,
+  snapshot
+}: {
+  engineRef: MutableRefObject<MissionEngine>;
+  snapshot: SimulationSnapshot;
+}): JSX.Element {
+  const groupRef = useRef<THREE.Group>(null);
+  const targetPosition = useMemo(() => new THREE.Vector3(), []);
+  const droneScale = nominalDroneModelScale(
+    snapshot.params.droneMassKg,
+    snapshot.renderScaleMPerUnit
+  );
+
+  useFrame(({ clock }, delta) => {
+    if (!groupRef.current) {
+      return;
+    }
+
+    const engine = engineRef.current;
+    const drone = engine.drone;
+    const scenePoint = toScenePosition(drone.position, snapshot);
+    targetPosition.copy(scenePoint);
+    targetPosition.y += Math.sin(clock.elapsedTime * 7.4) * 0.004;
+    groupRef.current.position.lerp(targetPosition, 1 - Math.exp(-delta * 12));
+    groupRef.current.rotation.order = "YXZ";
+    groupRef.current.rotation.y = -drone.headingRad + Math.PI * 0.5;
+    groupRef.current.rotation.x = drone.pitchRad;
+    groupRef.current.rotation.z = drone.rollRad;
+  });
+
+  return (
+    <group ref={groupRef}>
+      <DroneVisual droneScale={droneScale} />
     </group>
   );
 }
@@ -647,9 +1188,25 @@ function BeetleMarker({
     scale * (1.1 + (1 - introState.settleProgress) * 0.55);
   const haloColor = active ? "#ff8a61" : target.discovered ? "#ffd48d" : "#f0bd74";
   const haloOpacity = animatedOpacity * (active ? 0.95 : target.discovered ? 0.82 : 0.74);
-  const beaconHeight = scale * 2.9 * visibilityBoost;
-  const beaconRadius = scale * (active ? 0.72 : 0.58) * visibilityBoost;
-  const beaconStemRadius = scale * 0.11 * Math.sqrt(visibilityBoost);
+  const markerBoost = clamp(0.64 + visibilityBoost * 0.28, 0.92, 1.55);
+  const beaconHeight = metersToSceneUnits(
+    (active ? NOMINAL_TARGET_MARKER_HEIGHT_M : 0.18) * markerBoost,
+    snapshot.renderScaleMPerUnit
+  );
+  const beaconRadius = metersToSceneUnits(
+    (active ? 0.045 : 0.035) * markerBoost,
+    snapshot.renderScaleMPerUnit
+  );
+  const beaconStemRadius = metersToSceneUnits(
+    (active ? 0.012 : 0.009) * markerBoost,
+    snapshot.renderScaleMPerUnit
+  );
+  const haloInnerRadius = metersToSceneUnits((active ? 0.085 : 0.06) * markerBoost, snapshot.renderScaleMPerUnit);
+  const haloOuterRadius = metersToSceneUnits((active ? 0.15 : 0.1) * markerBoost, snapshot.renderScaleMPerUnit);
+  const groundInnerRadius = metersToSceneUnits((active ? 0.05 : 0.04) * markerBoost, snapshot.renderScaleMPerUnit);
+  const groundOuterRadius = metersToSceneUnits((active ? 0.09 : 0.07) * markerBoost, snapshot.renderScaleMPerUnit);
+  const activeOuterInnerRadius = metersToSceneUnits(0.14 * markerBoost, snapshot.renderScaleMPerUnit);
+  const activeOuterOuterRadius = metersToSceneUnits(0.19 * markerBoost, snapshot.renderScaleMPerUnit);
   const showMarker = shouldRenderMarkerForTarget(
     target,
     active,
@@ -706,18 +1263,18 @@ function BeetleMarker({
             <meshBasicMaterial color={haloColor} transparent opacity={haloOpacity} depthWrite={false} />
           </mesh>
           <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, beaconHeight * 0.72, 0]}>
-            <ringGeometry args={[scale * 1.4 * visibilityBoost, scale * 2.5 * visibilityBoost, 28]} />
+            <ringGeometry args={[haloInnerRadius, haloOuterRadius, 28]} />
             <meshBasicMaterial color={haloColor} transparent opacity={haloOpacity * 0.9} depthWrite={false} />
           </mesh>
           <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.03, 0]}>
-            <ringGeometry args={[scale * 1.05, scale * 1.8, 24]} />
+            <ringGeometry args={[groundInnerRadius, groundOuterRadius, 24]} />
             <meshBasicMaterial color={haloColor} transparent opacity={haloOpacity * 0.62} depthWrite={false} />
           </mesh>
         </>
       ) : null}
       {target.alive && active ? (
         <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, beaconHeight * 0.72, 0]}>
-          <ringGeometry args={[scale * 2.12, scale * 2.72, 28]} />
+          <ringGeometry args={[activeOuterInnerRadius, activeOuterOuterRadius, 28]} />
           <meshBasicMaterial color="#ff8a61" transparent opacity={0.48} depthWrite={false} />
         </mesh>
       ) : null}
@@ -821,7 +1378,8 @@ function SceneContents({
   isIntroActive,
   effectiveCameraMode,
   exposeVisualTestState,
-  useDenseTargetRendering
+  useDenseTargetRendering,
+  safetyEditorPreview
 }: {
   engineRef: MutableRefObject<MissionEngine>;
   snapshot: SimulationSnapshot;
@@ -830,9 +1388,33 @@ function SceneContents({
   effectiveCameraMode: CameraMode;
   exposeVisualTestState: boolean;
   useDenseTargetRendering: boolean;
+  safetyEditorPreview: SafetyEditorPreviewState | null;
 }): JSX.Element {
   const fieldLength = snapshot.params.fieldLengthM / snapshot.renderScaleMPerUnit;
   const fieldWidth = snapshot.params.fieldWidthM / snapshot.renderScaleMPerUnit;
+
+  if (safetyEditorPreview) {
+    return (
+      <>
+        <fog attach="fog" args={["#041110", 4, 16]} />
+        <color attach="background" args={["#020a09"]} />
+        <ambientLight intensity={0.42} color="#7ef0c2" />
+        <hemisphereLight color="#6fe3c6" groundColor="#041513" intensity={0.56} />
+        <directionalLight
+          position={[2.2, 4.8, 3.5]}
+          intensity={1.7}
+          color="#d7fff1"
+          castShadow
+          shadow-mapSize-width={1024}
+          shadow-mapSize-height={1024}
+        />
+        <pointLight position={[-2.8, 2.4, -1.7]} intensity={18} distance={10} color="#0ed18f" />
+        <pointLight position={[2.6, 1.8, 2.4]} intensity={14} distance={9} color="#ff8d63" />
+        <SafetyEditorPreview snapshot={snapshot} preview={safetyEditorPreview} />
+        <SafetyEditorCameraRig snapshot={snapshot} preview={safetyEditorPreview} />
+      </>
+    );
+  }
 
   return (
     <>
@@ -871,11 +1453,21 @@ function SceneContents({
 
       <FieldSurface snapshot={snapshot} />
       <DockActor snapshot={snapshot} charging={snapshot.drone.mode === "charging"} />
+      <ReferenceActors snapshot={snapshot} />
+      <WalkingFarmers snapshot={snapshot} />
+      {safetyEditorPreview ? (
+        <SafetyEditorPreview snapshot={snapshot} preview={safetyEditorPreview} />
+      ) : null}
       <MissionLines snapshot={snapshot} />
       <SearchFootprint engineRef={engineRef} snapshot={snapshot} />
       <BeetleTargets snapshot={snapshot} introProgress={introProgress} />
       <DroneActor engineRef={engineRef} snapshot={snapshot} />
       <LaserBeam engineRef={engineRef} snapshot={snapshot} />
+      <LaserSafetyZone
+        engineRef={engineRef}
+        snapshot={snapshot}
+        safetyEditorPreview={safetyEditorPreview}
+      />
       <SceneCameraRig
         engineRef={engineRef}
         snapshot={snapshot}
@@ -906,7 +1498,8 @@ export function SimulationScene({
   playbackSpeedOptions,
   onPlaybackSpeedChange,
   cameraMode,
-  onCameraModeChange
+  onCameraModeChange,
+  safetyEditorPreview
 }: SimulationSceneProps): JSX.Element {
   const effectiveCameraMode = isIntroActive ? "overview" : cameraMode;
   const exposeVisualTestState = useMemo(() => shouldExposeVisualTestState(), []);
@@ -979,11 +1572,12 @@ export function SimulationScene({
           engineRef={engineRef}
           snapshot={snapshot}
           introProgress={introProgress}
-          isIntroActive={isIntroActive}
-          effectiveCameraMode={effectiveCameraMode}
-          exposeVisualTestState={exposeVisualTestState}
-          useDenseTargetRendering={useDenseTargetRendering}
-        />
+        isIntroActive={isIntroActive}
+        effectiveCameraMode={effectiveCameraMode}
+        exposeVisualTestState={exposeVisualTestState}
+        useDenseTargetRendering={useDenseTargetRendering}
+        safetyEditorPreview={safetyEditorPreview}
+      />
       </Canvas>
     </div>
   );

@@ -70,7 +70,8 @@ export function generateTargets(
       neutralizationPulse: 0,
       engagementProgress: 0,
       detectedAtS: null,
-      neutralizedAtS: null
+      neutralizedAtS: null,
+      blockedUntilS: 0
     });
   }
 

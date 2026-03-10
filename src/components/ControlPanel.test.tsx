@@ -22,6 +22,7 @@ describe("ControlPanel", () => {
 
     expect(markup).toMatch(/aria-label="Laser dwell time"[^>]*max="1"/);
     expect(markup).toMatch(/aria-label="Recharge time"[^>]*max="120"/);
+    expect(markup).toMatch(/aria-label="Farmers in field"[^>]*max="6"/);
   });
 
   it("adds explanatory tooltips for less obvious targeting choices", () => {

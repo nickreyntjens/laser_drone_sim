@@ -272,6 +272,17 @@ export function ControlPanel({
             onParamChange={onParamChange}
             digits={2}
           />
+          <SliderField
+            label="Farmers in field"
+            paramKey="farmersPerHectare"
+            min={0}
+            max={6}
+            step={0.05}
+            unit="farmers / ha"
+            value={draftParams.farmersPerHectare}
+            onParamChange={onParamChange}
+            digits={2}
+          />
         </div>
 
         <div className="control-group">

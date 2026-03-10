@@ -6,9 +6,8 @@ import {
   lerp
 } from "./defaults";
 import {
-  NOMINAL_FIRING_STANDOFF_DISTANCE_M
-} from "./rendering";
-import {
+  calculateRelativeDwellFactorForDistance,
+  calculateSafetyMetrics,
   calculateNominalSafetyZoneRadiusM,
   safetyInputFromParameters
 } from "./safety";
@@ -57,7 +56,7 @@ const ATTITUDE_RESPONSE = 0.18;
 const YAW_RESPONSE_S = 0.34;
 const MAX_YAW_RATE_RAD_S = 1.9;
 const RESUME_BUFFER_S = 18;
-const APPROACH_HANDOFF_RADIUS_M = 0.48;
+const DEFAULT_APPROACH_HANDOFF_RADIUS_M = 0.48;
 const FIRING_CONTROL_MARGIN_M = 0.08;
 const FARMER_REVISIT_DELAY_S = 9;
 const FARMER_AVOIDANCE_RADIUS_M = 1.4;
@@ -68,9 +67,12 @@ const FARMER_AVOIDANCE_MARGIN_M = 0.55;
 const FARMER_LATERAL_EVASION_MPS = 0.85;
 const STUCK_WARNING_AFTER_S = 8;
 const APPROACH_BRAKING_BUFFER_M = 0.24;
+const APPROACH_OBJECTIVE_STOP_RADIUS_M = 0.05;
 const MIN_RECAPTURE_SPEED_MPS = 0.9;
 const MIN_APPROACH_SPEED_MPS = 0.28;
 const MAX_VERTICAL_ACCEL_FACTOR = 0.9;
+const MIN_ENGAGEMENT_CLEARANCE_M = 0.35;
+const MIN_OPTICS_DISTANCE_TOLERANCE_M = 0.05;
 
 function cloneVec3(source: Vec3): Vec3 {
   return { x: source.x, y: source.y, z: source.z };
@@ -221,6 +223,8 @@ export class MissionEngine {
 
   public readonly nominalSafetyZoneRadiusM: number;
 
+  public readonly safetyMetrics: ReturnType<typeof calculateSafetyMetrics>;
+
   public readonly sweepPath: Vec3[];
 
   public readonly targets: TargetState[];
@@ -274,6 +278,8 @@ export class MissionEngine {
     lastWarningAtS: number;
   };
 
+  private requiredFiringDwellS: number;
+
   constructor(
     params: SimulationParameters,
     seed = DEFAULT_SEED,
@@ -285,6 +291,7 @@ export class MissionEngine {
     this.playbackSpeed = playbackSpeed;
     this.renderScaleMPerUnit = RENDER_SCALE_M_PER_UNIT;
     this.dockPosition = vec3(-10, 0.18, params.fieldWidthM * 0.5);
+    this.safetyMetrics = calculateSafetyMetrics(safetyInputFromParameters(params));
     this.nominalSafetyZoneRadiusM = calculateNominalSafetyZoneRadiusM(
       safetyInputFromParameters(params)
     );
@@ -314,6 +321,7 @@ export class MissionEngine {
     this.onLogEvent = options.onLogEvent;
     this.debugLog = [];
     this.dockDirective = "resume";
+    this.requiredFiringDwellS = params.engagementDwellS;
 
     this.drone = {
       position: cloneVec3(this.dockPosition),
@@ -773,13 +781,7 @@ export class MissionEngine {
     if (this.drone.mode === "approach" || this.drone.mode === "aiming" || this.drone.mode === "firing" || this.drone.mode === "confirming") {
       const target = this.drone.activeTargetId !== null ? this.targets[this.drone.activeTargetId] : null;
       if (target) {
-        // Keep a small control margin below the max firing range so the aiming state can settle
-        // without repeatedly falling just outside the nominal 1 m envelope.
-        return vec3(
-          target.position.x,
-          target.position.y + Math.max(0.2, NOMINAL_FIRING_STANDOFF_DISTANCE_M - FIRING_CONTROL_MARGIN_M),
-          target.position.z
-        );
+        return this.computeEngagementPoint(target);
       }
     }
 
@@ -792,6 +794,91 @@ export class MissionEngine {
     }
 
     return cloneVec3(this.drone.position);
+  }
+
+  private computeEngagementGeometry(target: TargetState): {
+    objective: Vec3;
+    plannedEmitterTargetDistanceM: number;
+    focusDistanceErrorM: number;
+    insideRayleighZone: boolean;
+  } {
+    const idealEmitterTargetDistanceM = this.safetyMetrics.focalDistanceM;
+    const maxVerticalSeparationM = Math.max(
+      this.params.engageAltitudeM - target.position.y,
+      MIN_ENGAGEMENT_CLEARANCE_M
+    );
+
+    let verticalSeparationM: number;
+    let plannedEmitterTargetDistanceM: number;
+    let horizontalOffsetM = 0;
+
+    if (idealEmitterTargetDistanceM <= MIN_ENGAGEMENT_CLEARANCE_M) {
+      verticalSeparationM = MIN_ENGAGEMENT_CLEARANCE_M;
+      plannedEmitterTargetDistanceM = verticalSeparationM;
+    } else if (idealEmitterTargetDistanceM <= maxVerticalSeparationM) {
+      verticalSeparationM = idealEmitterTargetDistanceM;
+      plannedEmitterTargetDistanceM = idealEmitterTargetDistanceM;
+    } else {
+      verticalSeparationM = maxVerticalSeparationM;
+      plannedEmitterTargetDistanceM = idealEmitterTargetDistanceM;
+      horizontalOffsetM = Math.sqrt(
+        Math.max(
+          plannedEmitterTargetDistanceM * plannedEmitterTargetDistanceM -
+            verticalSeparationM * verticalSeparationM,
+          0
+        )
+      );
+    }
+
+    let offsetDirection = horizontalNormalize(
+      subtract(target.position, vec3(this.drone.position.x, target.position.y, this.drone.position.z))
+    );
+    if (horizontalLength(offsetDirection) <= 1e-6) {
+      offsetDirection = horizontalNormalize(
+        subtract(target.position, vec3(this.dockPosition.x, target.position.y, this.dockPosition.z))
+      );
+    }
+    if (horizontalLength(offsetDirection) <= 1e-6) {
+      offsetDirection = vec3(1, 0, 0);
+    }
+
+    const objective = vec3(
+      target.position.x - offsetDirection.x * horizontalOffsetM,
+      target.position.y + verticalSeparationM,
+      target.position.z - offsetDirection.z * horizontalOffsetM
+    );
+    const focusDistanceErrorM = Math.abs(
+      plannedEmitterTargetDistanceM - idealEmitterTargetDistanceM
+    );
+
+    return {
+      objective,
+      plannedEmitterTargetDistanceM,
+      focusDistanceErrorM,
+      insideRayleighZone: focusDistanceErrorM <= this.safetyMetrics.rayleighRangeM + 1e-6
+    };
+  }
+
+  private computeEngagementPoint(target: TargetState): Vec3 {
+    return this.computeEngagementGeometry(target).objective;
+  }
+
+  private engagementDistanceToleranceM(): number {
+    return Math.max(
+      MIN_OPTICS_DISTANCE_TOLERANCE_M,
+      Math.min(this.safetyMetrics.rayleighRangeM * 0.35, 0.22)
+    );
+  }
+
+  private engagementLateralToleranceM(target: TargetState): number {
+    const geometry = this.computeEngagementGeometry(target);
+    const verticalSeparationM = Math.max(geometry.objective.y - target.position.y, 0);
+    const maxDistanceM =
+      geometry.plannedEmitterTargetDistanceM + this.engagementDistanceToleranceM();
+    return Math.max(
+      0.08,
+      Math.sqrt(Math.max(maxDistanceM * maxDistanceM - verticalSeparationM * verticalSeparationM, 0))
+    );
   }
 
   private restoreKnownTargetsToQueue(reason: string): number {
@@ -884,11 +971,12 @@ export class MissionEngine {
 
   private computeApproachSpeedMps(
     horizontalDistanceM: number,
-    targetDirection: Vec3
+    targetDirection: Vec3,
+    handoffRadiusM: number
   ): number {
     const maxHorizontalAccelMps2 = Math.max(this.params.maxHorizontalAccelMps2, 0.1);
     const remainingDistanceM = Math.max(
-      horizontalDistanceM - APPROACH_HANDOFF_RADIUS_M,
+      horizontalDistanceM - handoffRadiusM,
       0
     );
 
@@ -1030,7 +1118,8 @@ export class MissionEngine {
     if (this.drone.mode === "approach") {
       desiredHorizontalSpeed = this.computeApproachSpeedMps(
         horizontalDistanceM,
-        horizontalNormalize(horizontalTarget)
+        horizontalNormalize(horizontalTarget),
+        APPROACH_OBJECTIVE_STOP_RADIUS_M
       );
     } else if (
       this.drone.mode === "aiming" ||
@@ -1184,10 +1273,26 @@ export class MissionEngine {
           activeTarget.engagementProgress = 0.35;
         }
 
-        if (horizontalError < APPROACH_HANDOFF_RADIUS_M && verticalError < 0.18) {
+        const targetDistanceM = activeTarget ? distance(this.drone.position, activeTarget.position) : Number.POSITIVE_INFINITY;
+        const plannedEmitterTargetDistanceM = activeTarget
+          ? this.computeEngagementGeometry(activeTarget).plannedEmitterTargetDistanceM
+          : Number.POSITIVE_INFINITY;
+        const engagementDistanceToleranceM = this.engagementDistanceToleranceM();
+        const handoffRadiusM = activeTarget
+          ? this.engagementLateralToleranceM(activeTarget)
+          : DEFAULT_APPROACH_HANDOFF_RADIUS_M;
+
+        if (
+          horizontalError < handoffRadiusM &&
+          verticalError < 0.18 &&
+          Math.abs(targetDistanceM - plannedEmitterTargetDistanceM) <=
+            engagementDistanceToleranceM
+        ) {
           this.transitionTo("aiming", "target engagement point reached", {
             targetId: this.drone.activeTargetId,
-            horizontalError
+            horizontalError,
+            targetDistanceM,
+            plannedEmitterTargetDistanceM
           });
         }
         break;
@@ -1196,6 +1301,9 @@ export class MissionEngine {
         const activeTarget =
           this.drone.activeTargetId !== null ? this.targets[this.drone.activeTargetId] : null;
         const targetDistanceM = activeTarget ? distance(this.drone.position, activeTarget.position) : Number.POSITIVE_INFINITY;
+        const plannedEmitterTargetDistanceM = activeTarget
+          ? this.computeEngagementGeometry(activeTarget).plannedEmitterTargetDistanceM
+          : Number.POSITIVE_INFINITY;
         if (activeTarget) {
           activeTarget.engagementProgress = clamp(
             this.modeTimerS / Math.max(this.params.aimDurationS, 0.01),
@@ -1206,13 +1314,22 @@ export class MissionEngine {
 
         if (
           this.modeTimerS >= this.params.aimDurationS &&
-          targetDistanceM <= NOMINAL_FIRING_STANDOFF_DISTANCE_M + 1e-3 &&
+          Math.abs(targetDistanceM - plannedEmitterTargetDistanceM) <=
+            this.engagementDistanceToleranceM() &&
           horizontalSpeed <= this.params.maxFiringSpeedMps + 1e-3
         ) {
+          this.requiredFiringDwellS =
+            this.params.engagementDwellS *
+            calculateRelativeDwellFactorForDistance(this.safetyMetrics, targetDistanceM);
           this.transitionTo("firing", "aim solution stable", {
             targetId: this.drone.activeTargetId,
             horizontalSpeed,
-            targetDistanceM
+            targetDistanceM,
+            plannedEmitterTargetDistanceM,
+            requiredFiringDwellS: this.requiredFiringDwellS,
+            insideRayleighZone:
+              Math.abs(targetDistanceM - this.safetyMetrics.focalDistanceM) <=
+              this.safetyMetrics.rayleighRangeM
           });
         }
         break;
@@ -1224,7 +1341,7 @@ export class MissionEngine {
           activeTarget.engagementProgress = 1;
         }
 
-        if (this.modeTimerS >= this.params.engagementDwellS) {
+        if (this.modeTimerS >= this.requiredFiringDwellS) {
           this.neutralizeActiveTarget();
           this.transitionTo("confirming", "laser dwell complete");
         }

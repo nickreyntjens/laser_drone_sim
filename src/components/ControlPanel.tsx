@@ -8,6 +8,7 @@ interface ControlPanelProps {
   isRunning: boolean;
   seed: number;
   onApply: () => void;
+  onEditSafetyZone: () => void;
   onRandomize: () => void;
   onRestart: () => void;
   onToggleRun: () => void;
@@ -135,6 +136,7 @@ export function ControlPanel({
   isRunning,
   seed,
   onApply,
+  onEditSafetyZone,
   onRandomize,
   onRestart,
   onToggleRun,
@@ -162,6 +164,9 @@ export function ControlPanel({
         </button>
         <button className="secondary-button" onClick={onRandomize}>
           Randomize beetles
+        </button>
+        <button className="secondary-button" onClick={onEditSafetyZone}>
+          Edit nominal safety zone
         </button>
         <button className="secondary-button" onClick={onToggleRun}>
           {isRunning ? "Pause" : "Resume"}

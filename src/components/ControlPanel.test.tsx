@@ -13,6 +13,7 @@ describe("ControlPanel", () => {
         isRunning={true}
         seed={17}
         onApply={vi.fn()}
+        onEditSafetyZone={vi.fn()}
         onRandomize={vi.fn()}
         onRestart={vi.fn()}
         onToggleRun={vi.fn()}
@@ -34,6 +35,7 @@ describe("ControlPanel", () => {
         isRunning={true}
         seed={17}
         onApply={vi.fn()}
+        onEditSafetyZone={vi.fn()}
         onRandomize={vi.fn()}
         onRestart={vi.fn()}
         onToggleRun={vi.fn()}
@@ -43,5 +45,25 @@ describe("ControlPanel", () => {
 
     expect(markup).toContain("Known locations. The drone assumes beetle coordinates are already known from prior drone footage and routes directly to them.");
     expect(markup).toContain("Choose whether the drone searches for beetles live or flies directly to beetles already identified in prior scouting imagery.");
+  });
+
+  it("includes a direct nominal safety zone editor action in setup", () => {
+    const markup = renderToStaticMarkup(
+      <ControlPanel
+        activeParams={defaultParameters}
+        draftParams={defaultParameters}
+        hasPendingChanges={false}
+        isRunning={true}
+        seed={17}
+        onApply={vi.fn()}
+        onEditSafetyZone={vi.fn()}
+        onRandomize={vi.fn()}
+        onRestart={vi.fn()}
+        onToggleRun={vi.fn()}
+        onParamChange={vi.fn()}
+      />
+    );
+
+    expect(markup).toContain("Edit nominal safety zone");
   });
 });

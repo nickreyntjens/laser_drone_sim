@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { defaultParameters } from "./defaults";
 import { MissionEngine } from "./engine";
-import { NOMINAL_FIRING_STANDOFF_DISTANCE_M } from "./rendering";
+import { calculateRelativeDwellFactorForDistance } from "./safety";
 import { DroneMode, SimulationParameters, TargetState } from "./types";
 
 function createTarget(id: number, x: number, z: number): TargetState {
@@ -537,7 +537,7 @@ describe("MissionEngine", () => {
     assertNoStuckWarnings(engine);
   });
 
-  it("only fires once the drone is within the nominal 1 m standoff distance", () => {
+  it("only fires once the target is inside the focal-distance engagement window", () => {
     const engine = buildEngine([createTarget(0, 6.2, 4.5)], {
       params: createTestParams({
         targetingMode: "preSurveyed",
@@ -549,8 +549,12 @@ describe("MissionEngine", () => {
     runUntil(engine, () => engine.drone.mode === "firing", 30);
 
     expect(engine.drone.activeTargetId).toBe(0);
-    expect(distanceBetween(engine.drone.position, engine.targets[0].position)).toBeLessThanOrEqual(
-      NOMINAL_FIRING_STANDOFF_DISTANCE_M + 0.05
+    const emitterTargetDistanceM = distanceBetween(engine.drone.position, engine.targets[0].position);
+    expect(emitterTargetDistanceM).toBeGreaterThanOrEqual(
+      engine.safetyMetrics.focalDistanceM - engine.safetyMetrics.rayleighRangeM - 0.05
+    );
+    expect(emitterTargetDistanceM).toBeLessThanOrEqual(
+      engine.safetyMetrics.focalDistanceM + engine.safetyMetrics.rayleighRangeM + 0.05
     );
   });
 
@@ -571,7 +575,7 @@ describe("MissionEngine", () => {
     const target = engine.targets[0];
     engine.drone.position = {
       x: target.position.x + 0.72,
-      y: target.position.y + NOMINAL_FIRING_STANDOFF_DISTANCE_M - 0.02,
+      y: target.position.y + params.safetyFocalDistanceM - 0.02,
       z: target.position.z
     };
     engine.drone.velocity = { x: 2.2, y: 0, z: 0 };
@@ -585,7 +589,7 @@ describe("MissionEngine", () => {
 
     expect(engine.drone.activeTargetId).toBe(0);
     expect(distanceBetween(engine.drone.position, target.position)).toBeLessThanOrEqual(
-      NOMINAL_FIRING_STANDOFF_DISTANCE_M + 0.15
+      params.safetyFocalDistanceM + engine.safetyMetrics.rayleighRangeM + 0.15
     );
   });
 
@@ -673,7 +677,7 @@ describe("MissionEngine", () => {
 
     engine.drone.position = {
       x: target.position.x + 0.72,
-      y: target.position.y + NOMINAL_FIRING_STANDOFF_DISTANCE_M - 0.02,
+      y: target.position.y + engine.safetyMetrics.focalDistanceM - 0.02,
       z: target.position.z
     };
     engine.drone.velocity = { x: 2.2, y: 0, z: 0 };
@@ -688,7 +692,7 @@ describe("MissionEngine", () => {
     );
 
     expect(distanceBetween(engine.drone.position, target.position)).toBeLessThanOrEqual(
-      NOMINAL_FIRING_STANDOFF_DISTANCE_M + 0.15
+      engine.safetyMetrics.focalDistanceM + engine.safetyMetrics.rayleighRangeM + 0.15
     );
   });
 
@@ -729,6 +733,106 @@ describe("MissionEngine", () => {
     expect(Number(safetyHoldEntry?.data?.blockingDistanceM ?? 0)).toBeLessThan(
       engine.nominalSafetyZoneRadiusM
     );
+    expect(engine.getDebugLog().some((entry) => entry.event === "stuck-warning")).toBe(false);
+  });
+
+  it("increases required firing dwell when the target is away from the focal point", () => {
+    const params = createTestParams({
+      targetingMode: "preSurveyed",
+      laserPowerW: 50,
+      engagementDwellS: 0.2,
+      safetyFocalDistanceM: 0.5,
+      safetyStartingApertureMm: 10
+    });
+    const engine = buildEngine([createTarget(0, 6.2, 4.5)], { params });
+
+    runUntil(engine, () => engine.drone.mode === "approach", 20);
+
+    const target = engine.targets[0];
+    const offFocusDistanceM = params.safetyFocalDistanceM + engine.safetyMetrics.rayleighRangeM * 1.4;
+    engine.drone.position = {
+      x: target.position.x,
+      y: target.position.y + offFocusDistanceM,
+      z: target.position.z
+    };
+    engine.drone.velocity = { x: 0, y: 0, z: 0 };
+    engine.drone.acceleration = { x: 0, y: 0, z: 0 };
+    engine.drone.mode = "aiming";
+    engine.drone.activeTargetId = 0;
+    (engine as unknown as { modeTimerS: number }).modeTimerS = params.aimDurationS - 0.01;
+
+    runUntil(
+      engine,
+      () =>
+        engine
+          .getDebugLog()
+          .some((entry) => entry.event === "mode-change" && entry.data?.to === "firing"),
+      0.5,
+      0.01
+    );
+
+    const firingTransition = [...engine.getDebugLog()]
+      .reverse()
+      .find((entry) => entry.event === "mode-change" && entry.data?.to === "firing");
+    const actualDistanceM = Number(firingTransition?.data?.targetDistanceM ?? 0);
+    const requiredDwellS = Number(firingTransition?.data?.requiredFiringDwellS ?? 0);
+    const expectedDwellS =
+      params.engagementDwellS *
+      calculateRelativeDwellFactorForDistance(engine.safetyMetrics, actualDistanceM);
+
+    expect(requiredDwellS).toBeGreaterThan(params.engagementDwellS);
+    expect(requiredDwellS).toBeCloseTo(expectedDwellS, 6);
+  });
+
+  it("plans an offset engagement point when focal distance is longer than the vertical firing clearance", () => {
+    const params = createTestParams({
+      targetingMode: "preSurveyed",
+      safetyFocalDistanceM: 3,
+      engageAltitudeM: 1.4
+    });
+    const engine = buildEngine([createTarget(0, 14, 7)], { params });
+    const target = engine.targets[0];
+
+    const geometry = (engine as unknown as {
+      computeEngagementGeometry: (value: TargetState) => {
+        objective: { x: number; y: number; z: number };
+        plannedEmitterTargetDistanceM: number;
+        focusDistanceErrorM: number;
+        insideRayleighZone: boolean;
+      };
+    }).computeEngagementGeometry(target);
+
+    const horizontalOffsetM = Math.hypot(
+      geometry.objective.x - target.position.x,
+      geometry.objective.z - target.position.z
+    );
+    const emitterTargetDistanceM = distanceBetween(geometry.objective, target.position);
+
+    expect(horizontalOffsetM).toBeGreaterThan(2.4);
+    expect(geometry.objective.y - target.position.y).toBeCloseTo(
+      params.engageAltitudeM - target.position.y,
+      6
+    );
+    expect(emitterTargetDistanceM).toBeCloseTo(params.safetyFocalDistanceM, 6);
+    expect(geometry.focusDistanceErrorM).toBeCloseTo(0, 6);
+    expect(geometry.insideRayleighZone).toBe(true);
+  });
+
+  it("still acquires and fires on a target when the focal distance is long", () => {
+    const params = createTestParams({
+      targetingMode: "preSurveyed",
+      safetyFocalDistanceM: 3,
+      farmersPerHectare: 0,
+      aimDurationS: 0.12
+    });
+    const engine = buildEngine([createTarget(0, 20, 36)], { params });
+
+    runUntil(engine, () => engine.drone.mode === "firing", 30);
+
+    const emitterTargetDistanceM = distanceBetween(engine.drone.position, engine.targets[0].position);
+    expect(
+      Math.abs(emitterTargetDistanceM - params.safetyFocalDistanceM)
+    ).toBeLessThanOrEqual(engine.safetyMetrics.rayleighRangeM + 0.06);
     expect(engine.getDebugLog().some((entry) => entry.event === "stuck-warning")).toBe(false);
   });
 

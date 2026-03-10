@@ -24,6 +24,12 @@ export interface SafetyModelMetrics {
   centerlineEnergyDensityAtFocusJPerM2: number;
 }
 
+export interface EngagementOpticsWindow {
+  idealEmitterTargetDistanceM: number;
+  minEmitterTargetDistanceM: number;
+  maxEmitterTargetDistanceM: number;
+}
+
 function clampPositive(value: number, floor: number): number {
   return Number.isFinite(value) ? Math.max(value, floor) : floor;
 }
@@ -95,6 +101,28 @@ export function calculateCenterlineEnergyDensityJPerM2(
 ): number {
   const beamRadiusM = calculateBeamRadiusAtDistanceM(metrics, distanceFromEmitterM);
   return (2 * metrics.shotEnergyJ) / (Math.PI * beamRadiusM * beamRadiusM);
+}
+
+export function calculateEngagementOpticsWindow(
+  metrics: SafetyModelMetrics
+): EngagementOpticsWindow {
+  return {
+    idealEmitterTargetDistanceM: metrics.focalDistanceM,
+    minEmitterTargetDistanceM: Math.max(0.05, metrics.focalDistanceM - metrics.rayleighRangeM),
+    maxEmitterTargetDistanceM: metrics.focalDistanceM + metrics.rayleighRangeM
+  };
+}
+
+export function calculateRelativeDwellFactorForDistance(
+  metrics: SafetyModelMetrics,
+  distanceFromEmitterM: number
+): number {
+  const beamRadiusM = calculateBeamRadiusAtDistanceM(metrics, distanceFromEmitterM);
+  return Math.max(
+    1,
+    (beamRadiusM * beamRadiusM) /
+      Math.max(metrics.beamWaistRadiusM * metrics.beamWaistRadiusM, 1e-12)
+  );
 }
 
 export function safetyInputFromParameters(

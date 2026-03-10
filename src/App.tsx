@@ -204,15 +204,20 @@ export default function App(): JSX.Element {
   const buildToastTriggeredRef = useRef(false);
   const previousSummaryRef = useRef(false);
   const safetyEditorResumeRef = useRef(false);
+  const suppressFarmerSafetyToastRef = useRef(false);
   const { isMobileUi } = useResponsiveUi();
   const isStandalonePage = typeof window !== "undefined" && window.parent === window;
+
+  useEffect(() => {
+    suppressFarmerSafetyToastRef.current = suppressFarmerSafetyToast;
+  }, [suppressFarmerSafetyToast]);
 
   const handleMissionLog = useCallback((entry: MissionLogEvent): void => {
     if (entry.event !== "safety-hold") {
       return;
     }
 
-    if (suppressFarmerSafetyToast) {
+    if (suppressFarmerSafetyToastRef.current) {
       return;
     }
 
@@ -232,7 +237,7 @@ export default function App(): JSX.Element {
       blockingDistanceM,
       nominalSafetyZoneRadiusM
     });
-  }, [suppressFarmerSafetyToast]);
+  }, []);
 
   const {
     engineRef,
@@ -402,6 +407,7 @@ export default function App(): JSX.Element {
         isRunning={isRunning}
         seed={seed}
         onApply={applyDraft}
+        onEditSafetyZone={() => openSafetyZoneEditor()}
         onRandomize={randomizeScenario}
         onRestart={restartMission}
         onToggleRun={() => setIsRunning(!isRunning)}

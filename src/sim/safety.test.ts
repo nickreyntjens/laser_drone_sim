@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { defaultParameters } from "./defaults";
-import { calculateSafetyMetrics, safetyInputFromParameters } from "./safety";
+import {
+  calculateEngagementOpticsWindow,
+  calculateRelativeDwellFactorForDistance,
+  calculateSafetyMetrics,
+  safetyInputFromParameters
+} from "./safety";
 
 describe("nominal safety model", () => {
   it("keeps the default nominal safety zone close to the existing 3 m visualization", () => {
@@ -75,5 +80,29 @@ describe("nominal safety model", () => {
       baseline.nominalSafetyZoneRadiusM,
       6
     );
+  });
+
+  it("uses focal distance as the center of the engagement optics window", () => {
+    const metrics = calculateSafetyMetrics(safetyInputFromParameters(defaultParameters));
+    const window = calculateEngagementOpticsWindow(metrics);
+
+    expect(window.idealEmitterTargetDistanceM).toBeCloseTo(
+      defaultParameters.safetyFocalDistanceM,
+      6
+    );
+    expect(window.minEmitterTargetDistanceM).toBeLessThan(window.idealEmitterTargetDistanceM);
+    expect(window.maxEmitterTargetDistanceM).toBeGreaterThan(window.idealEmitterTargetDistanceM);
+  });
+
+  it("increases dwell factor as the target moves away from the focal point", () => {
+    const metrics = calculateSafetyMetrics(safetyInputFromParameters(defaultParameters));
+    const atFocus = calculateRelativeDwellFactorForDistance(metrics, metrics.focalDistanceM);
+    const offFocus = calculateRelativeDwellFactorForDistance(
+      metrics,
+      metrics.focalDistanceM + metrics.rayleighRangeM * 1.5
+    );
+
+    expect(atFocus).toBeCloseTo(1, 6);
+    expect(offFocus).toBeGreaterThan(atFocus);
   });
 });

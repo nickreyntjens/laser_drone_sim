@@ -6,7 +6,6 @@ import {
   DRONE_MODEL_SPAN_SCENE_UNITS,
   estimatedDroneLengthM,
   metersToSceneUnits,
-  NOMINAL_FIRING_STANDOFF_DISTANCE_M,
   NOMINAL_TARGET_MARKER_HEIGHT_M,
   nominalDroneModelScale
 } from "./rendering";
@@ -37,8 +36,7 @@ describe("rendering dimensions", () => {
     expect(droneSpanSceneUnits).toBeLessThan(safetyRadiusSceneUnits * 0.4);
   });
 
-  it("uses a 30 cm target marker and a 1 m firing standoff by default", () => {
+  it("uses a 30 cm target marker by default", () => {
     expect(NOMINAL_TARGET_MARKER_HEIGHT_M).toBeCloseTo(0.3, 6);
-    expect(NOMINAL_FIRING_STANDOFF_DISTANCE_M).toBeCloseTo(1, 6);
   });
 });

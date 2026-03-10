@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { defaultParameters } from "./defaults";
 import { MissionEngine } from "./engine";
+import { applyFieldTypePreset, getFieldProfile } from "./fieldProfiles";
 import { calculateRelativeDwellFactorForDistance } from "./safety";
 import { DroneMode, SimulationParameters, TargetState } from "./types";
 
@@ -28,6 +29,51 @@ function createVisibleTarget(id: number, x: number, z: number): TargetState {
     discovered: true,
     queued: true,
     detectedAtS: 0
+  };
+}
+
+function createOrchardTarget(
+  id: number,
+  treeCenterX: number,
+  treeCenterZ: number,
+  position: { x: number; y: number; z: number }
+): TargetState {
+  return {
+    id,
+    position,
+    supportPosition: { x: treeCenterX, y: 1.7, z: treeCenterZ },
+    rowIndex: Math.max(0, Math.round((treeCenterZ - 1.75) / 3.5)),
+    alive: true,
+    discovered: true,
+    queued: true,
+    detectionPulse: 0,
+    neutralizationPulse: 0,
+    engagementProgress: 0,
+    detectedAtS: 0,
+    neutralizedAtS: null,
+    blockedUntilS: 0
+  };
+}
+
+function createGreenhouseTarget(
+  id: number,
+  position: { x: number; y: number; z: number },
+  supportPosition: { x: number; y: number; z: number }
+): TargetState {
+  return {
+    id,
+    position,
+    supportPosition,
+    rowIndex: Math.max(0, Math.round(position.z / 0.45)),
+    alive: true,
+    discovered: true,
+    queued: true,
+    detectionPulse: 0,
+    neutralizationPulse: 0,
+    engagementProgress: 0,
+    detectedAtS: 0,
+    neutralizedAtS: null,
+    blockedUntilS: 0
   };
 }
 
@@ -835,6 +881,138 @@ describe("MissionEngine", () => {
       Math.abs(emitterTargetDistanceM - params.safetyFocalDistanceM)
     ).toBeLessThanOrEqual(engine.safetyMetrics.rayleighRangeM + 0.06);
     expect(engine.getDebugLog().some((entry) => entry.event === "stuck-warning")).toBe(false);
+  });
+
+  it("still acquires top-canopy orchard targets without tree avoidance pushing it off lock", () => {
+    const params = createTestParams({
+      fieldType: "orchardMarmoratedStinkBug",
+      targetingMode: "preSurveyed",
+      fieldLengthM: 80,
+      fieldWidthM: 28,
+      rowSpacingM: 3.5,
+      laneSpacingM: 3.5,
+      searchAltitudeM: 4.9,
+      engageAltitudeM: 4.1,
+      detectionRadiusM: 3.3,
+      safetyFocalDistanceM: 0.5,
+      cruiseSpeedMps: 3.8,
+      farmersPerHectare: 0
+    });
+    const engine = buildEngine([
+      createOrchardTarget(0, 24, 36.75, { x: 24.08, y: 3.09, z: 36.75 })
+    ], { params });
+
+    runUntil(engine, () => engine.drone.mode === "firing", 20);
+    assertNoStuckWarnings(engine);
+  });
+
+  it("keeps orchard side engagements outside tree canopies and still acquires the target", () => {
+    const params = createTestParams({
+      fieldType: "orchardMarmoratedStinkBug",
+      targetingMode: "preSurveyed",
+      fieldLengthM: 80,
+      fieldWidthM: 28,
+      rowSpacingM: 3.5,
+      laneSpacingM: 3.5,
+      searchAltitudeM: 4.9,
+      engageAltitudeM: 4.1,
+      detectionRadiusM: 3.3,
+      safetyFocalDistanceM: 1.15,
+      cruiseSpeedMps: 3.8
+    });
+    const engine = buildEngine([
+      createOrchardTarget(0, 24, 8.75, { x: 24.08, y: 2.15, z: 9.18 })
+    ], { params });
+    const target = engine.targets[0];
+    const orchardProfile = getFieldProfile("orchardMarmoratedStinkBug");
+
+    const geometry = (engine as unknown as {
+      computeEngagementGeometry: (value: TargetState) => {
+        objective: { x: number; y: number; z: number };
+        plannedEmitterTargetDistanceM: number;
+        focusDistanceErrorM: number;
+      };
+    }).computeEngagementGeometry(target);
+    const objectiveRadiusM = Math.hypot(
+      geometry.objective.x - target.supportPosition!.x,
+      geometry.objective.z - target.supportPosition!.z
+    );
+
+    expect(objectiveRadiusM).toBeGreaterThanOrEqual(
+      orchardProfile.canopyRadiusM + 0.7
+    );
+    expect(geometry.plannedEmitterTargetDistanceM).toBeCloseTo(params.safetyFocalDistanceM, 1);
+    runUntil(engine, () => engine.drone.mode === "firing", 35);
+    assertNoStuckWarnings(engine);
+  });
+
+  it("does not start orchard firing outside the Rayleigh window", () => {
+    const params = applyFieldTypePreset(
+      {
+        ...createTestParams({
+          fieldType: "orchardMarmoratedStinkBug",
+          fieldLengthM: 120,
+          fieldWidthM: 70,
+          edgeDensityPerHectare: 400,
+          targetingMode: "preSurveyed",
+          farmersPerHectare: 2
+        })
+      },
+      "orchardMarmoratedStinkBug"
+    );
+    const engine = new MissionEngine(params, 1, 1, { enableDebugLogging: true });
+
+    runUntil(
+      engine,
+      () =>
+        engine
+          .getDebugLog()
+          .filter((entry) => entry.event === "mode-change" && entry.data?.to === "firing")
+          .length >= 2,
+      20
+    );
+
+    const firingTransitions = engine
+      .getDebugLog()
+      .filter((entry) => entry.event === "mode-change" && entry.data?.to === "firing");
+
+    expect(firingTransitions.length).toBeGreaterThanOrEqual(2);
+    for (const transition of firingTransitions) {
+      expect(transition.data?.insideRayleighZone).toBe(true);
+      expect(Number(transition.data?.requiredFiringDwellS ?? 0)).toBeLessThanOrEqual(
+        params.engagementDwellS * 2.05
+      );
+    }
+    assertNoStuckWarnings(engine);
+  });
+
+  it("navigates around greenhouse support columns and still acquires the target", () => {
+    const params = applyFieldTypePreset(
+      createTestParams({
+        fieldType: "greenhouseTulipCaterpillar",
+        fieldLengthM: 60,
+        fieldWidthM: 18,
+        rowSpacingM: 0.45,
+        laneSpacingM: 2.25,
+        searchAltitudeM: 2.15,
+        engageAltitudeM: 1.3,
+        detectionRadiusM: 1.9,
+        safetyFocalDistanceM: 0.45,
+        cruiseSpeedMps: 2.8,
+        farmersPerHectare: 0
+      }),
+      "greenhouseTulipCaterpillar"
+    );
+    const engine = buildEngine([
+      createGreenhouseTarget(
+        0,
+        { x: 8.35, y: 0.46, z: 4.18 },
+        { x: 8.22, y: 0.24, z: 4.12 }
+      )
+    ], { params });
+
+    runUntil(engine, () => engine.drone.mode === "firing", 25);
+    assertNoStuckWarnings(engine);
   });
 
   it("maintains separation from a farmer during a fast low-altitude approach", () => {

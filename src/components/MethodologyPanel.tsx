@@ -1,4 +1,5 @@
 import { SimulationSnapshot } from "../sim/types";
+import { getFieldProfile } from "../sim/fieldProfiles";
 
 interface MethodologyPanelProps {
   snapshot: SimulationSnapshot;
@@ -7,6 +8,9 @@ interface MethodologyPanelProps {
 
 export function MethodologyPanel({ snapshot, onOpenBuildPrompt }: MethodologyPanelProps): JSX.Element {
   const { params, playbackSpeed, renderScaleMPerUnit } = snapshot;
+  const fieldProfile = getFieldProfile(params.fieldType);
+  const targetPluralLabel =
+    fieldProfile.targetLabelPlural.charAt(0).toUpperCase() + fieldProfile.targetLabelPlural.slice(1);
 
   return (
     <section className="panel">
@@ -29,11 +33,11 @@ export function MethodologyPanel({ snapshot, onOpenBuildPrompt }: MethodologyPan
         <div className="method-card">
           <h3>Mission logic</h3>
           <p>
-            Beetles come from a Poisson point process whose invasion-edge density is expressed in beetles per
-            hectare and decays exponentially with distance from the field border. In live-search mode the drone
-            flies a boustrophedon sweep; in pre-surveyed mode it follows a scalable route-planning heuristic over
-            the known beetle map. In both cases it returns once the remaining pack energy approaches the dock-return
-            requirement plus a {params.reserveBatteryPct}% reserve.
+            {targetPluralLabel} come from a Poisson point process whose invasion-edge density is
+            expressed in {fieldProfile.pressureUnitLabel} and decays exponentially with distance from the field
+            border. In live-search mode the drone flies a boustrophedon sweep; in pre-surveyed mode it follows a
+            scalable route-planning heuristic over the known target map. In both cases it returns once the remaining
+            pack energy approaches the dock-return requirement plus a {params.reserveBatteryPct}% reserve.
           </p>
         </div>
         <div className="method-card">
@@ -41,7 +45,7 @@ export function MethodologyPanel({ snapshot, onOpenBuildPrompt }: MethodologyPan
           <p>
             Metrics stay in physical units. The rendered field is compressed to {renderScaleMPerUnit} m per world
             unit and the playback runs at {playbackSpeed.toFixed(2)}x simulated time so a landing-page visitor can
-            watch a full sortie without waiting through the real mission duration. Beetle markers are visually enlarged.
+            watch a full sortie without waiting through the real mission duration. Target markers are visually enlarged.
           </p>
         </div>
         <div className="method-card">

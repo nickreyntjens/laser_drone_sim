@@ -8,6 +8,7 @@ export const DEFAULT_SEED = 17;
 export const defaultParameters: SimulationParameters = {
   fieldLengthM: 400,
   fieldWidthM: 250,
+  fieldType: "potatoColoradoBeetle",
   targetingMode: "preSurveyed",
   showOnlySelectedTargetMarkers: true,
   edgeDensityPerHectare: 400,

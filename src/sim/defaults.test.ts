@@ -18,6 +18,10 @@ describe("default playback speeds", () => {
     expect(defaultParameters.showOnlySelectedTargetMarkers).toBe(true);
   });
 
+  it("defaults to the potato / Colorado beetle field mode", () => {
+    expect(defaultParameters.fieldType).toBe("potatoColoradoBeetle");
+  });
+
   it("defaults the nominal safety optics close to a 3 m zone", () => {
     expect(defaultParameters.safetyFocalDistanceM).toBeCloseTo(0.5, 6);
     expect(defaultParameters.safetyStartingApertureMm).toBeCloseTo(10, 6);

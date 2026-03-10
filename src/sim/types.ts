@@ -18,7 +18,11 @@ export type DroneMode =
   | "complete";
 
 export type TargetingMode = "search" | "preSurveyed";
-export type FieldType = "potatoColoradoBeetle" | "riceYellowStemBorerEgg";
+export type FieldType =
+  | "potatoColoradoBeetle"
+  | "riceYellowStemBorerEgg"
+  | "orchardMarmoratedStinkBug"
+  | "greenhouseTulipCaterpillar";
 
 export interface SimulationParameters {
   fieldLengthM: number;

@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { defaultParameters } from "./defaults";
+import { buildSweepPath, generateTargets } from "./generation";
 import { getFieldProfile } from "./fieldProfiles";
-import { generateTargets } from "./generation";
+import { greenhouseAisleCenters, greenhouseSupportLineCenters } from "./greenhouse";
+import { orchardTreeCenter } from "./orchard";
 import { SimulationParameters } from "./types";
 
 function createParams(overrides: Partial<SimulationParameters> = {}): SimulationParameters {
@@ -80,5 +82,102 @@ describe("generateTargets", () => {
         );
       })
     ).toBe(true);
+  });
+
+  it("places orchard stink bugs on tree tops and side faces tied to orchard tree centers", () => {
+    const orchardParams = createParams({
+      fieldType: "orchardMarmoratedStinkBug",
+      rowSpacingM: 3.5,
+      laneSpacingM: 3.5,
+      fieldLengthM: 140,
+      fieldWidthM: 42
+    });
+    const orchardProfile = getFieldProfile("orchardMarmoratedStinkBug");
+    const orchardTargets = generateTargets(orchardParams, 23);
+
+    expect(orchardTargets.length).toBeGreaterThan(0);
+    expect(
+      orchardTargets.every((target) => {
+        if (!target.supportPosition) {
+          return false;
+        }
+
+        const treeCenter = orchardTreeCenter(target.rowIndex, target.position.x, orchardParams, orchardProfile);
+        const dzToRow = Math.abs(treeCenter.z - target.supportPosition.z);
+        const dxToTree = Math.abs(treeCenter.x - target.supportPosition.x);
+        const radialDistance = Math.hypot(
+          target.position.x - treeCenter.x,
+          target.position.z - treeCenter.z
+        );
+        const topTarget = target.position.y >= orchardProfile.maturePlantHeightM * 0.82;
+        const sideTarget =
+          target.position.y >= orchardProfile.maturePlantHeightM * 0.42 &&
+          target.position.y <= orchardProfile.maturePlantHeightM * 0.78;
+
+        return (
+          dzToRow <= 1e-6 &&
+          dxToTree <= 1e-6 &&
+          radialDistance <= orchardProfile.canopyRadiusM + 0.18 &&
+          radialDistance >= orchardProfile.canopyRadiusM * 0.08 &&
+          (topTarget || sideTarget)
+        );
+      })
+    ).toBe(true);
+  });
+
+  it("uses alley-centered sweep lanes in orchard mode", () => {
+    const orchardParams = createParams({
+      fieldType: "orchardMarmoratedStinkBug",
+      rowSpacingM: 3.5,
+      laneSpacingM: 3.5,
+      fieldWidthM: 14,
+      fieldLengthM: 60
+    });
+    const sweepPath = buildSweepPath(orchardParams);
+    const uniqueLaneCenters = [...new Set(sweepPath.map((point) => Number(point.z.toFixed(4))))];
+
+    expect(uniqueLaneCenters).toContain(0);
+    expect(uniqueLaneCenters).toContain(3.5);
+    expect(uniqueLaneCenters).toContain(7);
+    expect(uniqueLaneCenters).toContain(10.5);
+    expect(uniqueLaneCenters).toContain(14);
+  });
+
+  it("places greenhouse caterpillars on tulip leaves and sweeps greenhouse aisles", () => {
+    const greenhouseParams = createParams({
+      fieldType: "greenhouseTulipCaterpillar",
+      rowSpacingM: 0.45,
+      laneSpacingM: 2.25,
+      fieldWidthM: 18,
+      fieldLengthM: 60
+    });
+    const greenhouseProfile = getFieldProfile("greenhouseTulipCaterpillar");
+    const greenhouseTargets = generateTargets(greenhouseParams, 31);
+    const sweepPath = buildSweepPath(greenhouseParams);
+    const laneCenters = [...new Set(sweepPath.map((point) => Number(point.z.toFixed(4))))];
+    const expectedAisles = greenhouseAisleCenters(greenhouseParams).map((value) => Number(value.toFixed(4)));
+    const supportLines = greenhouseSupportLineCenters(greenhouseParams);
+
+    expect(greenhouseTargets.length).toBeGreaterThan(0);
+    expect(
+      greenhouseTargets.every((target) => {
+        if (!target.supportPosition) {
+          return false;
+        }
+
+        const dx = Math.abs(target.position.x - target.supportPosition.x);
+        const dz = Math.abs(target.position.z - target.supportPosition.z);
+        const dy = target.position.y - target.supportPosition.y;
+        return (
+          dx <= greenhouseProfile.representativeLeafLengthM * 0.36 + 1e-6 &&
+          dz <= greenhouseProfile.canopyRadiusM * 0.6 + 1e-6 &&
+          dy >= 0.12 &&
+          dy <= 0.34 &&
+          target.position.y >= greenhouseProfile.maturePlantHeightM * 0.62
+        );
+      })
+    ).toBe(true);
+    expect(laneCenters.sort((a, b) => a - b)).toEqual(expectedAisles.sort((a, b) => a - b));
+    expect(supportLines.length).toBeGreaterThan(0);
   });
 });

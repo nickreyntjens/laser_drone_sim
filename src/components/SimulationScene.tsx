@@ -8,6 +8,16 @@ import * as THREE from "three";
 import { clamp } from "../sim/defaults";
 import { MissionEngine } from "../sim/engine";
 import { getFieldProfile } from "../sim/fieldProfiles";
+import {
+  greenhouseAisleCenters,
+  greenhouseColumnCenters,
+  greenhouseSupportLineCenters,
+  GREENHOUSE_BAY_LENGTH_M,
+  GREENHOUSE_COLUMN_RADIUS_M,
+  GREENHOUSE_GUTTER_HEIGHT_M,
+  GREENHOUSE_RIDGE_HEIGHT_M
+} from "../sim/greenhouse";
+import { orchardTreeCenter } from "../sim/orchard";
 import { getBeetleIntroVisualState } from "../sim/intro";
 import {
   estimatedDroneLengthM,
@@ -80,14 +90,38 @@ function sceneNoise(a: number, b: number): number {
 }
 
 function TargetIcon({ fieldType }: { fieldType: FieldType }): JSX.Element {
-  return fieldType === "potatoColoradoBeetle" ? (
-    <span className="target-icon target-icon-beetle" aria-hidden="true">
-      <span />
-      <span />
-      <span />
-    </span>
-  ) : (
-    <span className="target-icon target-icon-egg" aria-hidden="true">
+  if (fieldType === "potatoColoradoBeetle") {
+    return (
+      <span className="target-icon target-icon-beetle" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+      </span>
+    );
+  }
+
+  if (fieldType === "riceYellowStemBorerEgg") {
+    return (
+      <span className="target-icon target-icon-egg" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+      </span>
+    );
+  }
+
+  if (fieldType === "greenhouseTulipCaterpillar") {
+    return (
+      <span className="target-icon target-icon-caterpillar" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+      </span>
+    );
+  }
+
+  return (
+    <span className="target-icon target-icon-stinkbug" aria-hidden="true">
       <span />
       <span />
       <span />
@@ -137,7 +171,12 @@ function FieldTypeDropdown({
       </button>
       {open ? (
         <div className="field-type-menu">
-          {(["potatoColoradoBeetle", "riceYellowStemBorerEgg"] as FieldType[]).map((value) => {
+          {([
+            "potatoColoradoBeetle",
+            "riceYellowStemBorerEgg",
+            "orchardMarmoratedStinkBug",
+            "greenhouseTulipCaterpillar"
+          ] as FieldType[]).map((value) => {
             const profile = getFieldProfile(value);
             return (
               <button
@@ -194,7 +233,12 @@ function getVisualRowMetrics(snapshot: SimulationSnapshot): {
   return {
     rowCount,
     rowSpacingM: snapshot.params.rowSpacingM,
-    alongRowPitchM: 3.4
+    alongRowPitchM:
+      fieldProfile.cropVisualStyle === "orchard"
+        ? fieldProfile.inRowPlantSpacingM
+        : fieldProfile.cropVisualStyle === "greenhouse"
+          ? Math.max(fieldProfile.inRowPlantSpacingM * 2, 0.55)
+          : 3.4
   };
 }
 
@@ -355,11 +399,15 @@ function SceneVisualTestProbe({
   return null;
 }
 
-function CropCanopy({ snapshot }: { snapshot: SimulationSnapshot }): JSX.Element {
+function CropCanopy({ snapshot }: { snapshot: SimulationSnapshot }): JSX.Element | null {
   const meshRef = useRef<THREE.InstancedMesh>(null);
   const dummy = useMemo(() => new THREE.Object3D(), []);
   const instances = useMemo(() => {
     const fieldProfile = getFieldProfile(snapshot.params.fieldType);
+    if (fieldProfile.cropVisualStyle === "orchard") {
+      return [];
+    }
+
     const { rowCount, rowSpacingM, alongRowPitchM } = getVisualRowMetrics(snapshot);
     const spacingM = fieldProfile.cropVisualStyle === "rice" ? alongRowPitchM : 3.4;
     const columns = Math.max(6, Math.floor(snapshot.params.fieldLengthM / spacingM));
@@ -432,6 +480,10 @@ function CropCanopy({ snapshot }: { snapshot: SimulationSnapshot }): JSX.Element
     meshRef.current.instanceMatrix.needsUpdate = true;
   }, [dummy, instances]);
 
+  if (instances.length === 0) {
+    return null;
+  }
+
   return (
     <instancedMesh ref={meshRef} args={[undefined, undefined, instances.length]} castShadow receiveShadow>
       {getFieldProfile(snapshot.params.fieldType).cropVisualStyle === "rice" ? (
@@ -447,31 +499,497 @@ function CropCanopy({ snapshot }: { snapshot: SimulationSnapshot }): JSX.Element
   );
 }
 
+function OrchardTrees({ snapshot }: { snapshot: SimulationSnapshot }): JSX.Element | null {
+  const fieldProfile = getFieldProfile(snapshot.params.fieldType);
+  const trunkRef = useRef<THREE.InstancedMesh>(null);
+  const canopyRef = useRef<THREE.InstancedMesh>(null);
+  const canopyLobeRef = useRef<THREE.InstancedMesh>(null);
+  const dummy = useMemo(() => new THREE.Object3D(), []);
+  const { trees, canopyLobes } = useMemo(() => {
+    if (fieldProfile.cropVisualStyle !== "orchard") {
+      return { trees: [], canopyLobes: [] };
+    }
+
+    const rowCount = Math.max(1, Math.round(snapshot.params.fieldWidthM / snapshot.params.rowSpacingM));
+    const trees: Array<{
+      trunkPosition: [number, number, number];
+      trunkScale: [number, number, number];
+      trunkRotation: [number, number, number];
+      canopyPosition: [number, number, number];
+      canopyScale: [number, number, number];
+      canopyRotation: [number, number, number];
+    }> = [];
+    const canopyLobes: Array<{
+      position: [number, number, number];
+      scale: [number, number, number];
+      rotation: [number, number, number];
+    }> = [];
+
+    for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
+      for (
+        let x = Math.max(1.4, fieldProfile.canopyRadiusM + 0.7);
+        x < snapshot.params.fieldLengthM - Math.max(1.4, fieldProfile.canopyRadiusM + 0.7);
+        x += fieldProfile.inRowPlantSpacingM
+      ) {
+        const treeCenter = orchardTreeCenter(rowIndex, x, snapshot.params, fieldProfile);
+        const n1 = sceneNoise(rowIndex * 0.37, x * 0.11);
+        const n2 = sceneNoise(rowIndex * 0.21 + 7, x * 0.07 + 13);
+        const n3 = sceneNoise(rowIndex * 0.49 + 4, x * 0.17 + 2);
+        const n4 = sceneNoise(rowIndex * 0.28 + 11, x * 0.13 + 19);
+        const trunkBase = toScenePosition({ x: treeCenter.x, y: 0, z: treeCenter.z }, snapshot);
+        const canopyCenter = toScenePosition(
+          {
+            x: treeCenter.x + (n3 - 0.5) * fieldProfile.canopyRadiusM * 0.18,
+            y: fieldProfile.trunkHeightM + (fieldProfile.maturePlantHeightM - fieldProfile.trunkHeightM) * (0.4 + n4 * 0.07),
+            z: treeCenter.z + (n4 - 0.5) * fieldProfile.canopyRadiusM * 0.14
+          },
+          snapshot
+        );
+        const trunkHeightUnits = metersToSceneUnits(fieldProfile.trunkHeightM, snapshot.renderScaleMPerUnit);
+        const canopyHeightUnits = metersToSceneUnits(
+          (fieldProfile.maturePlantHeightM - fieldProfile.trunkHeightM) * (0.95 + n1 * 0.08),
+          snapshot.renderScaleMPerUnit
+        );
+        const canopyRadiusUnits = metersToSceneUnits(
+          fieldProfile.canopyRadiusM * (0.92 + n2 * 0.14),
+          snapshot.renderScaleMPerUnit
+        );
+        const canopyRadiusXUnits = canopyRadiusUnits * (1.04 + (n3 - 0.5) * 0.22);
+        const canopyRadiusZUnits = canopyRadiusUnits * (0.96 + (n4 - 0.5) * 0.26);
+
+        trees.push({
+          trunkPosition: [trunkBase.x, trunkHeightUnits * 0.5, trunkBase.z],
+          trunkScale: [
+            metersToSceneUnits(0.11, snapshot.renderScaleMPerUnit),
+            trunkHeightUnits,
+            metersToSceneUnits(0.11, snapshot.renderScaleMPerUnit)
+          ],
+          trunkRotation: [
+            (n3 - 0.5) * 0.05,
+            n2 * Math.PI,
+            (n4 - 0.5) * 0.06
+          ],
+          canopyPosition: [canopyCenter.x, canopyCenter.y, canopyCenter.z],
+          canopyScale: [canopyRadiusXUnits * 1.14, canopyHeightUnits, canopyRadiusZUnits],
+          canopyRotation: [
+            (n1 - 0.5) * 0.12,
+            n2 * Math.PI,
+            (n3 - 0.5) * 0.1
+          ]
+        });
+
+        const lobeCount = 3;
+        for (let lobeIndex = 0; lobeIndex < lobeCount; lobeIndex += 1) {
+          const lobeNoise = sceneNoise(rowIndex * 0.63 + lobeIndex * 2.7, x * 0.19 + lobeIndex * 5.1);
+          const angle = n2 * Math.PI * 2 + lobeIndex * ((Math.PI * 2) / lobeCount) + (lobeNoise - 0.5) * 0.7;
+          const radialOffsetUnits =
+            Math.min(canopyRadiusXUnits, canopyRadiusZUnits) * (0.35 + lobeNoise * 0.18);
+          const heightOffsetUnits =
+            canopyHeightUnits * (-0.08 + lobeIndex * 0.11 + (lobeNoise - 0.5) * 0.18);
+          const lobeWidthUnits =
+            canopyRadiusUnits * (0.38 + lobeNoise * 0.16);
+          const lobeHeightUnits =
+            canopyHeightUnits * (0.3 + lobeNoise * 0.16);
+
+          canopyLobes.push({
+            position: [
+              canopyCenter.x + Math.cos(angle) * radialOffsetUnits,
+              canopyCenter.y + heightOffsetUnits,
+              canopyCenter.z + Math.sin(angle) * radialOffsetUnits
+            ],
+            scale: [
+              lobeWidthUnits * (1.06 + (lobeNoise - 0.5) * 0.18),
+              lobeHeightUnits,
+              lobeWidthUnits * (0.94 + (0.5 - lobeNoise) * 0.16)
+            ],
+            rotation: [
+              (lobeNoise - 0.5) * 0.18,
+              angle,
+              (n4 - 0.5) * 0.14
+            ]
+          });
+        }
+      }
+    }
+
+    return { trees, canopyLobes };
+  }, [fieldProfile, snapshot]);
+
+  useLayoutEffect(() => {
+    if (!trunkRef.current || !canopyRef.current || !canopyLobeRef.current) {
+      return;
+    }
+
+    for (let index = 0; index < trees.length; index += 1) {
+      const instance = trees[index];
+      dummy.position.set(instance.trunkPosition[0], instance.trunkPosition[1], instance.trunkPosition[2]);
+      dummy.rotation.set(
+        instance.trunkRotation[0],
+        instance.trunkRotation[1],
+        instance.trunkRotation[2]
+      );
+      dummy.scale.set(instance.trunkScale[0], instance.trunkScale[1], instance.trunkScale[2]);
+      dummy.updateMatrix();
+      trunkRef.current.setMatrixAt(index, dummy.matrix);
+
+      dummy.position.set(instance.canopyPosition[0], instance.canopyPosition[1], instance.canopyPosition[2]);
+      dummy.rotation.set(
+        instance.canopyRotation[0],
+        instance.canopyRotation[1],
+        instance.canopyRotation[2]
+      );
+      dummy.scale.set(instance.canopyScale[0], instance.canopyScale[1], instance.canopyScale[2]);
+      dummy.updateMatrix();
+      canopyRef.current.setMatrixAt(index, dummy.matrix);
+    }
+
+    for (let index = 0; index < canopyLobes.length; index += 1) {
+      const lobe = canopyLobes[index];
+      dummy.position.set(lobe.position[0], lobe.position[1], lobe.position[2]);
+      dummy.rotation.set(lobe.rotation[0], lobe.rotation[1], lobe.rotation[2]);
+      dummy.scale.set(lobe.scale[0], lobe.scale[1], lobe.scale[2]);
+      dummy.updateMatrix();
+      canopyLobeRef.current.setMatrixAt(index, dummy.matrix);
+    }
+
+    trunkRef.current.instanceMatrix.needsUpdate = true;
+    canopyRef.current.instanceMatrix.needsUpdate = true;
+    canopyLobeRef.current.instanceMatrix.needsUpdate = true;
+  }, [canopyLobes, dummy, trees]);
+
+  if (trees.length === 0) {
+    return null;
+  }
+
+  return (
+    <group>
+      <instancedMesh ref={trunkRef} args={[undefined, undefined, trees.length]} castShadow receiveShadow>
+        <cylinderGeometry args={[0.45, 0.68, 1, 7]} />
+        <meshStandardMaterial color="#6a4e35" roughness={0.95} />
+      </instancedMesh>
+      <instancedMesh ref={canopyRef} args={[undefined, undefined, trees.length]} castShadow receiveShadow>
+        <icosahedronGeometry args={[0.52, 1]} />
+        <meshStandardMaterial color="#5c8f4f" roughness={0.84} />
+      </instancedMesh>
+      <instancedMesh ref={canopyLobeRef} args={[undefined, undefined, canopyLobes.length]} castShadow receiveShadow>
+        <icosahedronGeometry args={[0.36, 0]} />
+        <meshStandardMaterial color="#649755" roughness={0.88} />
+      </instancedMesh>
+    </group>
+  );
+}
+
+function GreenhouseTulips({ snapshot }: { snapshot: SimulationSnapshot }): JSX.Element | null {
+  const fieldProfile = getFieldProfile(snapshot.params.fieldType);
+  const stemRef = useRef<THREE.InstancedMesh>(null);
+  const bloomRef = useRef<THREE.InstancedMesh>(null);
+  const dummy = useMemo(() => new THREE.Object3D(), []);
+  const { stems, blooms } = useMemo(() => {
+    if (fieldProfile.cropVisualStyle !== "greenhouse") {
+      return { stems: [], blooms: [] };
+    }
+
+    const { rowCount, rowSpacingM, alongRowPitchM } = getVisualRowMetrics(snapshot);
+    const columns = Math.max(8, Math.floor(snapshot.params.fieldLengthM / alongRowPitchM));
+    const stems: Array<{
+      position: [number, number, number];
+      scale: [number, number, number];
+      rotation: [number, number, number];
+    }> = [];
+    const blooms: Array<{
+      position: [number, number, number];
+      scale: [number, number, number];
+      rotation: [number, number, number];
+      color: THREE.Color;
+    }> = [];
+    const bloomPalette = ["#f05b78", "#f6cc56", "#f2f1ed", "#f18a31", "#d85ba6"];
+
+    for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
+      const rowCenterZ = rowIndex * rowSpacingM + rowSpacingM * 0.5;
+      for (let column = 0; column < columns; column += 1) {
+        const x = 0.9 + column * alongRowPitchM;
+        if (x > snapshot.params.fieldLengthM - 0.8) {
+          continue;
+        }
+
+        const n1 = sceneNoise(rowIndex * 0.27 + 2, column * 0.57 + 4);
+        const n2 = sceneNoise(rowIndex * 0.51 + 7, column * 0.29 + 10);
+        const stemHeightM = fieldProfile.maturePlantHeightM * (0.82 + n1 * 0.16);
+        const stemBase = toScenePosition(
+          {
+            x,
+            y: stemHeightM * 0.5,
+            z: rowCenterZ + (n1 - 0.5) * rowSpacingM * 0.18
+          },
+          snapshot
+        );
+        const bloomPoint = toScenePosition(
+          {
+            x: x + (n2 - 0.5) * 0.04,
+            y: stemHeightM * (0.92 + n2 * 0.05),
+            z: rowCenterZ + (n1 - 0.5) * rowSpacingM * 0.18
+          },
+          snapshot
+        );
+
+        stems.push({
+          position: [stemBase.x, stemBase.y, stemBase.z],
+          scale: [
+            metersToSceneUnits(0.012, snapshot.renderScaleMPerUnit),
+            metersToSceneUnits(stemHeightM, snapshot.renderScaleMPerUnit),
+            metersToSceneUnits(0.012, snapshot.renderScaleMPerUnit)
+          ],
+          rotation: [(n1 - 0.5) * 0.14, n2 * Math.PI, (n2 - 0.5) * 0.08]
+        });
+        blooms.push({
+          position: [bloomPoint.x, bloomPoint.y, bloomPoint.z],
+          scale: [
+            metersToSceneUnits(0.06, snapshot.renderScaleMPerUnit),
+            metersToSceneUnits(0.1 + n2 * 0.02, snapshot.renderScaleMPerUnit),
+            metersToSceneUnits(0.06, snapshot.renderScaleMPerUnit)
+          ],
+          rotation: [(n2 - 0.5) * 0.3, n1 * Math.PI, 0],
+          color: new THREE.Color(bloomPalette[Math.floor(n1 * bloomPalette.length) % bloomPalette.length])
+        });
+      }
+    }
+
+    return { stems, blooms };
+  }, [fieldProfile, snapshot]);
+
+  useLayoutEffect(() => {
+    if (!stemRef.current || !bloomRef.current) {
+      return;
+    }
+
+    for (let index = 0; index < stems.length; index += 1) {
+      const stem = stems[index];
+      dummy.position.set(stem.position[0], stem.position[1], stem.position[2]);
+      dummy.rotation.set(stem.rotation[0], stem.rotation[1], stem.rotation[2]);
+      dummy.scale.set(stem.scale[0], stem.scale[1], stem.scale[2]);
+      dummy.updateMatrix();
+      stemRef.current.setMatrixAt(index, dummy.matrix);
+    }
+
+    for (let index = 0; index < blooms.length; index += 1) {
+      const bloom = blooms[index];
+      dummy.position.set(bloom.position[0], bloom.position[1], bloom.position[2]);
+      dummy.rotation.set(bloom.rotation[0], bloom.rotation[1], bloom.rotation[2]);
+      dummy.scale.set(bloom.scale[0], bloom.scale[1], bloom.scale[2]);
+      dummy.updateMatrix();
+      bloomRef.current.setMatrixAt(index, dummy.matrix);
+      bloomRef.current.setColorAt(index, bloom.color);
+    }
+
+    stemRef.current.instanceMatrix.needsUpdate = true;
+    bloomRef.current.instanceMatrix.needsUpdate = true;
+    if (bloomRef.current.instanceColor) {
+      bloomRef.current.instanceColor.needsUpdate = true;
+    }
+  }, [blooms, dummy, stems]);
+
+  if (stems.length === 0) {
+    return null;
+  }
+
+  return (
+    <group>
+      <instancedMesh ref={stemRef} args={[undefined, undefined, stems.length]} castShadow receiveShadow>
+        <cylinderGeometry args={[0.5, 0.7, 1, 5]} />
+        <meshStandardMaterial color="#6ea85f" roughness={0.88} />
+      </instancedMesh>
+      <instancedMesh ref={bloomRef} args={[undefined, undefined, blooms.length]} castShadow receiveShadow>
+        <capsuleGeometry args={[0.5, 0.9, 3, 6]} />
+        <meshStandardMaterial roughness={0.7} />
+      </instancedMesh>
+    </group>
+  );
+}
+
+function GreenhouseStructure({ snapshot }: { snapshot: SimulationSnapshot }): JSX.Element | null {
+  const fieldProfile = getFieldProfile(snapshot.params.fieldType);
+  const columnRef = useRef<THREE.InstancedMesh>(null);
+  const beamRef = useRef<THREE.InstancedMesh>(null);
+  const dummy = useMemo(() => new THREE.Object3D(), []);
+  const columns = useMemo(() => {
+    if (fieldProfile.cropVisualStyle !== "greenhouse") {
+      return [];
+    }
+
+    return greenhouseColumnCenters(snapshot.params).map((column) => {
+      const scenePoint = toScenePosition(
+        { x: column.x, y: GREENHOUSE_GUTTER_HEIGHT_M * 0.5, z: column.z },
+        snapshot
+      );
+      return {
+        position: [scenePoint.x, scenePoint.y, scenePoint.z] as [number, number, number],
+        scale: [
+          metersToSceneUnits(GREENHOUSE_COLUMN_RADIUS_M * 1.05, snapshot.renderScaleMPerUnit),
+          metersToSceneUnits(GREENHOUSE_GUTTER_HEIGHT_M, snapshot.renderScaleMPerUnit),
+          metersToSceneUnits(GREENHOUSE_COLUMN_RADIUS_M * 1.05, snapshot.renderScaleMPerUnit)
+        ] as [number, number, number]
+      };
+    });
+  }, [fieldProfile, snapshot]);
+  const beams = useMemo(() => {
+    if (fieldProfile.cropVisualStyle !== "greenhouse") {
+      return [];
+    }
+
+    const supportLines = greenhouseSupportLineCenters(snapshot.params);
+    const beamEntries: Array<{
+      position: [number, number, number];
+      scale: [number, number, number];
+      rotation: [number, number, number];
+    }> = [];
+    const fieldCenterX = snapshot.params.fieldLengthM * 0.5;
+    const fieldCenterZ = snapshot.params.fieldWidthM * 0.5;
+    const beamY = GREENHOUSE_GUTTER_HEIGHT_M;
+
+    for (let index = 0; index < supportLines.length; index += 1) {
+      const z = supportLines[index];
+      const linePoint = toScenePosition({ x: fieldCenterX, y: beamY, z }, snapshot);
+      beamEntries.push({
+        position: [linePoint.x, linePoint.y, linePoint.z],
+        scale: [
+          metersToSceneUnits(snapshot.params.fieldLengthM - 3.2, snapshot.renderScaleMPerUnit),
+          metersToSceneUnits(0.06, snapshot.renderScaleMPerUnit),
+          metersToSceneUnits(0.08, snapshot.renderScaleMPerUnit)
+        ],
+        rotation: [0, 0, 0]
+      });
+    }
+
+    for (
+      let x = GREENHOUSE_BAY_LENGTH_M * 0.5;
+      x < snapshot.params.fieldLengthM - GREENHOUSE_BAY_LENGTH_M * 0.25;
+      x += GREENHOUSE_BAY_LENGTH_M
+    ) {
+      const ridgePoint = toScenePosition({ x, y: GREENHOUSE_RIDGE_HEIGHT_M, z: fieldCenterZ }, snapshot);
+      beamEntries.push({
+        position: [ridgePoint.x, ridgePoint.y, ridgePoint.z],
+        scale: [
+          metersToSceneUnits(0.06, snapshot.renderScaleMPerUnit),
+          metersToSceneUnits(0.08, snapshot.renderScaleMPerUnit),
+          metersToSceneUnits(snapshot.params.fieldWidthM - 1.2, snapshot.renderScaleMPerUnit)
+        ],
+        rotation: [0, 0, 0]
+      });
+    }
+
+    return beamEntries;
+  }, [fieldProfile, snapshot]);
+
+  useLayoutEffect(() => {
+    if (!columnRef.current || !beamRef.current) {
+      return;
+    }
+
+    for (let index = 0; index < columns.length; index += 1) {
+      const column = columns[index];
+      dummy.position.set(column.position[0], column.position[1], column.position[2]);
+      dummy.rotation.set(0, 0, 0);
+      dummy.scale.set(column.scale[0], column.scale[1], column.scale[2]);
+      dummy.updateMatrix();
+      columnRef.current.setMatrixAt(index, dummy.matrix);
+    }
+
+    for (let index = 0; index < beams.length; index += 1) {
+      const beam = beams[index];
+      dummy.position.set(beam.position[0], beam.position[1], beam.position[2]);
+      dummy.rotation.set(beam.rotation[0], beam.rotation[1], beam.rotation[2]);
+      dummy.scale.set(beam.scale[0], beam.scale[1], beam.scale[2]);
+      dummy.updateMatrix();
+      beamRef.current.setMatrixAt(index, dummy.matrix);
+    }
+
+    columnRef.current.instanceMatrix.needsUpdate = true;
+    beamRef.current.instanceMatrix.needsUpdate = true;
+  }, [beams, columns, dummy]);
+
+  if (fieldProfile.cropVisualStyle !== "greenhouse") {
+    return null;
+  }
+
+  const roofLength = snapshot.params.fieldLengthM / snapshot.renderScaleMPerUnit;
+  const roofWidth = snapshot.params.fieldWidthM / snapshot.renderScaleMPerUnit;
+  const gutterY = metersToSceneUnits(GREENHOUSE_GUTTER_HEIGHT_M, snapshot.renderScaleMPerUnit);
+  const ridgeY = metersToSceneUnits(GREENHOUSE_RIDGE_HEIGHT_M, snapshot.renderScaleMPerUnit);
+
+  return (
+    <group>
+      <instancedMesh ref={columnRef} args={[undefined, undefined, columns.length]} castShadow receiveShadow>
+        <cylinderGeometry args={[0.5, 0.58, 1, 6]} />
+        <meshStandardMaterial color="#9ca7ae" roughness={0.48} metalness={0.32} />
+      </instancedMesh>
+      <instancedMesh ref={beamRef} args={[undefined, undefined, beams.length]} castShadow receiveShadow>
+        <boxGeometry args={[1, 1, 1]} />
+        <meshStandardMaterial color="#8a959d" roughness={0.42} metalness={0.28} />
+      </instancedMesh>
+      <mesh position={[0, gutterY + (ridgeY - gutterY) * 0.5, 0]} rotation={[0.18, 0, 0]}>
+        <planeGeometry args={[roofLength + 0.6, roofWidth + 0.6]} />
+        <meshStandardMaterial color="#d8edf0" transparent opacity={0.16} roughness={0.14} metalness={0.08} side={THREE.DoubleSide} />
+      </mesh>
+    </group>
+  );
+}
+
 function FieldSurface({ snapshot }: { snapshot: SimulationSnapshot }): JSX.Element {
   const fieldLength = snapshot.params.fieldLengthM / snapshot.renderScaleMPerUnit;
   const fieldWidth = snapshot.params.fieldWidthM / snapshot.renderScaleMPerUnit;
   const fieldProfile = getFieldProfile(snapshot.params.fieldType);
   const { rowCount, rowSpacingM } = getVisualRowMetrics(snapshot);
   const rowWidth =
-    (rowSpacingM / snapshot.renderScaleMPerUnit) *
-    (fieldProfile.cropVisualStyle === "rice" ? 0.42 : 0.68);
+    fieldProfile.cropVisualStyle === "orchard"
+      ? metersToSceneUnits(fieldProfile.canopyRadiusM * 2.6, snapshot.renderScaleMPerUnit)
+      : fieldProfile.cropVisualStyle === "greenhouse"
+        ? (rowSpacingM / snapshot.renderScaleMPerUnit) * 0.54
+      : (rowSpacingM / snapshot.renderScaleMPerUnit) *
+        (fieldProfile.cropVisualStyle === "rice" ? 0.42 : 0.68);
 
   return (
     <group>
       <mesh receiveShadow rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.025, 0]}>
         <planeGeometry args={[fieldLength + 12, fieldWidth + 12]} />
-        <meshStandardMaterial color={fieldProfile.cropVisualStyle === "rice" ? "#1f2e26" : "#241d18"} roughness={1} />
+        <meshStandardMaterial
+          color={
+            fieldProfile.cropVisualStyle === "rice"
+              ? "#1f2e26"
+              : fieldProfile.cropVisualStyle === "orchard"
+                ? "#223126"
+                : fieldProfile.cropVisualStyle === "greenhouse"
+                  ? "#1f2522"
+                : "#241d18"
+          }
+          roughness={1}
+        />
       </mesh>
 
       <mesh receiveShadow rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.004, 0]}>
         <planeGeometry args={[fieldLength + 1, fieldWidth + 1]} />
-        <meshStandardMaterial color={fieldProfile.cropVisualStyle === "rice" ? "#3f5a47" : "#3b2d23"} roughness={1} />
+        <meshStandardMaterial
+          color={
+            fieldProfile.cropVisualStyle === "rice"
+              ? "#3f5a47"
+              : fieldProfile.cropVisualStyle === "orchard"
+                ? "#4f6d49"
+                : fieldProfile.cropVisualStyle === "greenhouse"
+                  ? "#454c41"
+                : "#3b2d23"
+          }
+          roughness={1}
+        />
       </mesh>
 
       {fieldProfile.cropVisualStyle === "rice" ? (
         <mesh receiveShadow rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.002, 0]}>
           <planeGeometry args={[fieldLength, fieldWidth]} />
           <meshStandardMaterial color="#355e5d" transparent opacity={0.42} roughness={0.18} metalness={0.08} />
+        </mesh>
+      ) : fieldProfile.cropVisualStyle === "greenhouse" ? (
+        <mesh receiveShadow rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.001, 0]}>
+          <planeGeometry args={[fieldLength, fieldWidth]} />
+          <meshStandardMaterial color="#2e3a2d" roughness={0.92} />
         </mesh>
       ) : null}
 
@@ -483,14 +1001,24 @@ function FieldSurface({ snapshot }: { snapshot: SimulationSnapshot }): JSX.Eleme
           <mesh key={rowIndex} position={[0, 0.01, sceneRow.z]} receiveShadow>
             <boxGeometry args={[fieldLength, 0.025, rowWidth]} />
             <meshStandardMaterial
-              color={fieldProfile.cropVisualStyle === "rice" ? "#61895f" : "#6e5735"}
+              color={
+                fieldProfile.cropVisualStyle === "rice"
+                  ? "#61895f"
+                  : fieldProfile.cropVisualStyle === "orchard"
+                    ? "#715c40"
+                    : fieldProfile.cropVisualStyle === "greenhouse"
+                      ? "#4c5a3e"
+                    : "#6e5735"
+              }
               roughness={0.96}
             />
           </mesh>
         );
       })}
 
-      <CropCanopy snapshot={snapshot} />
+      {fieldProfile.cropVisualStyle === "orchard" ? <OrchardTrees snapshot={snapshot} /> : null}
+      {fieldProfile.cropVisualStyle === "greenhouse" ? <GreenhouseStructure snapshot={snapshot} /> : null}
+      {fieldProfile.cropVisualStyle === "greenhouse" ? <GreenhouseTulips snapshot={snapshot} /> : <CropCanopy snapshot={snapshot} />}
     </group>
   );
 }
@@ -1379,7 +1907,8 @@ function BeetleMarker({
     snapshot.renderScaleMPerUnit
   );
   const leafSupportOffset =
-    fieldProfile.targetVisualStyle === "eggMass" && target.supportPosition
+    (fieldProfile.targetVisualStyle === "eggMass" || fieldProfile.targetVisualStyle === "caterpillar") &&
+    target.supportPosition
       ? [
           metersToSceneUnits(
             target.supportPosition.x - target.position.x,
@@ -1453,26 +1982,101 @@ function BeetleMarker({
             </>
           ) : null}
           <group scale={[scale * 0.68, scale * 0.68 * introState.landingSquash, scale * 0.68]}>
-          {[
-            [-0.22, 0.04, 0],
-            [0, 0.14, 0.08],
-            [0.22, 0.02, -0.06],
-            [0.08, -0.08, -0.14]
-          ].map((offset, index) => (
-            <mesh key={index} castShadow position={offset as [number, number, number]}>
-              <sphereGeometry args={[0.34, 10, 10]} />
-              <meshStandardMaterial
-                color={color}
-                emissive={target.alive ? haloColor : "#1d201d"}
-                emissiveIntensity={target.alive ? 0.18 : 0.06}
-                transparent
-                opacity={animatedOpacity}
-                roughness={0.5}
-              />
-            </mesh>
-          ))}
+            {[
+              [-0.22, 0.04, 0],
+              [0, 0.14, 0.08],
+              [0.22, 0.02, -0.06],
+              [0.08, -0.08, -0.14]
+            ].map((offset, index) => (
+              <mesh key={index} castShadow position={offset as [number, number, number]}>
+                <sphereGeometry args={[0.34, 10, 10]} />
+                <meshStandardMaterial
+                  color={color}
+                  emissive={target.alive ? haloColor : "#1d201d"}
+                  emissiveIntensity={target.alive ? 0.18 : 0.06}
+                  transparent
+                  opacity={animatedOpacity}
+                  roughness={0.5}
+                />
+              </mesh>
+            ))}
           </group>
         </>
+      ) : fieldProfile.targetVisualStyle === "caterpillar" ? (
+        <>
+          {leafSupportOffset ? (
+            <Line
+              points={[
+                [leafSupportOffset[0], leafSupportOffset[1], leafSupportOffset[2]],
+                [0, 0, 0]
+              ]}
+              color="#8fbc6d"
+              lineWidth={2}
+              transparent
+              opacity={0.88}
+            />
+          ) : null}
+          <group scale={[scale * 0.74, scale * 0.62 * introState.landingSquash, scale * 0.66]}>
+            {[-0.42, -0.18, 0.08, 0.28].map((segmentX, index) => (
+              <mesh
+                key={index}
+                castShadow
+                position={[segmentX, Math.sin(index * 0.7) * 0.08, 0]}
+                scale={[0.28 - index * 0.02, 0.24, 0.22]}
+              >
+                <sphereGeometry args={[0.7, 10, 10]} />
+                <meshStandardMaterial
+                  color={index === 0 ? "#6a8545" : color}
+                  emissive={target.alive ? haloColor : "#1d201d"}
+                  emissiveIntensity={target.alive ? 0.14 : 0.05}
+                  transparent
+                  opacity={animatedOpacity}
+                  roughness={0.68}
+                />
+              </mesh>
+            ))}
+            {[-0.26, -0.04, 0.18].map((legX, index) => (
+              <group key={index}>
+                <mesh position={[legX, -0.08, -0.12]} rotation={[0, 0, 0.8]}>
+                  <cylinderGeometry args={[0.02, 0.02, 0.22, 6]} />
+                  <meshStandardMaterial color="#617346" roughness={0.84} transparent opacity={animatedOpacity} />
+                </mesh>
+                <mesh position={[legX, -0.08, 0.12]} rotation={[0, 0, -0.8]}>
+                  <cylinderGeometry args={[0.02, 0.02, 0.22, 6]} />
+                  <meshStandardMaterial color="#617346" roughness={0.84} transparent opacity={animatedOpacity} />
+                </mesh>
+              </group>
+            ))}
+          </group>
+        </>
+      ) : fieldProfile.targetVisualStyle === "stinkBug" ? (
+        <group scale={[scale * 0.78, scale * 0.62 * introState.landingSquash, scale * 0.88]}>
+          <mesh castShadow>
+            <sphereGeometry args={[0.8, 12, 12]} />
+            <meshStandardMaterial
+              color={color}
+              emissive={target.alive ? haloColor : "#1d201d"}
+              emissiveIntensity={target.alive ? 0.2 : 0.07}
+              transparent
+              opacity={animatedOpacity}
+              roughness={0.62}
+            />
+          </mesh>
+          <mesh castShadow position={[0, 0.42, 0]} scale={[0.58, 0.34, 0.68]}>
+            <sphereGeometry args={[0.9, 10, 10]} />
+            <meshStandardMaterial color="#8c6b48" roughness={0.72} transparent opacity={animatedOpacity} />
+          </mesh>
+          {[-0.48, -0.26, 0.12, 0.44].map((legX, index) => (
+            <mesh key={index} position={[legX, -0.06, index < 2 ? -0.34 : 0.34]} rotation={[0, 0, index < 2 ? 0.58 : -0.58]}>
+              <cylinderGeometry args={[0.03, 0.03, 0.78, 6]} />
+              <meshStandardMaterial color="#684d35" roughness={0.84} transparent opacity={animatedOpacity} />
+            </mesh>
+          ))}
+          <mesh position={[0, 0.78, 0.24]} scale={[0.2, 0.2, 0.2]}>
+            <sphereGeometry args={[0.9, 8, 8]} />
+            <meshStandardMaterial color="#5b412e" roughness={0.8} transparent opacity={animatedOpacity} />
+          </mesh>
+        </group>
       ) : (
         <mesh
           castShadow

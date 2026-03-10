@@ -1,5 +1,6 @@
 import { AttitudeIndicator } from "./AttitudeIndicator";
 import { MODE_LABELS } from "../sim/defaults";
+import { formatPressureLabel } from "../sim/fieldProfiles";
 import { SimulationSnapshot } from "../sim/types";
 import {
   formatDuration,
@@ -43,7 +44,10 @@ export function SceneHud({
   const modeLabel = isIntroActive ? "Field initialization" : MODE_LABELS[drone.mode];
   const fieldAreaSqM = snapshot.params.fieldLengthM * snapshot.params.fieldWidthM;
   const fieldSizeLabel = formatHectares(fieldAreaSqM);
-  const pressureLabel = `${Math.round(snapshot.params.edgeDensityPerHectare)} beetles/ha`;
+  const pressureLabel = formatPressureLabel(
+    snapshot.params.fieldType,
+    snapshot.params.edgeDensityPerHectare
+  );
   const currentSpeedMps = Math.sqrt(
     drone.velocity.x * drone.velocity.x +
       drone.velocity.y * drone.velocity.y +

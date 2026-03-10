@@ -79,7 +79,7 @@ export function SummaryPanel({ summary }: SummaryPanelProps): JSX.Element {
               <strong>{formatDuration(summary.averageTimePerTargetS)}</strong>
             </div>
             <div>
-              <span>Energy per beetle</span>
+              <span>Energy per target</span>
               <strong>{formatEnergy(summary.energyPerBeetleWh)}</strong>
             </div>
             <div>

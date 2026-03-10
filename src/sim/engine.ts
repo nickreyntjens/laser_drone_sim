@@ -27,6 +27,13 @@ import {
   wrapAngleRad
 } from "./math";
 import { buildSweepPath, generateTargets } from "./generation";
+import { getFieldProfile } from "./fieldProfiles";
+import {
+  enumerateNearbyGreenhouseColumns,
+  GREENHOUSE_COLUMN_RADIUS_M,
+  GREENHOUSE_GUTTER_HEIGHT_M
+} from "./greenhouse";
+import { orchardTreeCenter, enumerateNearbyOrchardTreeCenters } from "./orchard";
 import { planPreSurveyedTargetRoute } from "./planner";
 import {
   InternalFarmerState,
@@ -70,9 +77,17 @@ const APPROACH_BRAKING_BUFFER_M = 0.24;
 const APPROACH_OBJECTIVE_STOP_RADIUS_M = 0.05;
 const MIN_RECAPTURE_SPEED_MPS = 0.9;
 const MIN_APPROACH_SPEED_MPS = 0.28;
+const AIM_RELOCK_AFTER_S = 1.1;
 const MAX_VERTICAL_ACCEL_FACTOR = 0.9;
 const MIN_ENGAGEMENT_CLEARANCE_M = 0.35;
 const MIN_OPTICS_DISTANCE_TOLERANCE_M = 0.05;
+const ORCHARD_CANOPY_CLEARANCE_M = 0.55;
+const ORCHARD_CANOPY_INFLUENCE_M = 2.4;
+const ORCHARD_CANOPY_EVASION_MPS = 1.2;
+const ORCHARD_OBJECTIVE_MARGIN_M = 0.22;
+const GREENHOUSE_COLUMN_CLEARANCE_M = 0.34;
+const GREENHOUSE_COLUMN_INFLUENCE_M = 1.6;
+const GREENHOUSE_COLUMN_EVASION_MPS = 1.05;
 
 function cloneVec3(source: Vec3): Vec3 {
   return { x: source.x, y: source.y, z: source.z };
@@ -803,11 +818,76 @@ export class MissionEngine {
     focusDistanceErrorM: number;
     insideRayleighZone: boolean;
   } {
+    const fieldProfile = getFieldProfile(this.params.fieldType);
     const idealEmitterTargetDistanceM = this.safetyMetrics.focalDistanceM;
     const maxVerticalSeparationM = Math.max(
       this.params.engageAltitudeM - target.position.y,
       MIN_ENGAGEMENT_CLEARANCE_M
     );
+
+    if (fieldProfile.cropVisualStyle === "orchard") {
+      const treeCenter =
+        target.supportPosition ?? orchardTreeCenter(target.rowIndex, target.position.x, this.params, fieldProfile);
+      const canopyTopM = fieldProfile.maturePlantHeightM;
+      const sideSignFromTarget = Math.sign(target.position.z - treeCenter.z);
+      const sideSign =
+        sideSignFromTarget !== 0
+          ? sideSignFromTarget
+          : this.drone.position.z >= treeCenter.z
+            ? 1
+            : -1;
+      const targetOnTop = target.position.y >= canopyTopM * 0.82;
+
+      if (!targetOnTop) {
+        const radialFromTree = vec3(
+          target.position.x - treeCenter.x,
+          0,
+          target.position.z - treeCenter.z
+        );
+        let radialDirection = horizontalNormalize(radialFromTree);
+        if (horizontalLength(radialDirection) <= 1e-6) {
+          radialDirection = vec3(0, 0, sideSign);
+        }
+
+        const targetRadiusM = Math.max(horizontalLength(radialFromTree), 0);
+        const objectiveRadiusM = Math.max(
+          fieldProfile.canopyRadiusM + ORCHARD_CANOPY_CLEARANCE_M + ORCHARD_OBJECTIVE_MARGIN_M,
+          targetRadiusM + 0.18
+        );
+        const horizontalEmitterTargetDistanceM = Math.max(
+          objectiveRadiusM - targetRadiusM,
+          0
+        );
+        const preferredVerticalSeparationM = Math.sqrt(
+          Math.max(
+            idealEmitterTargetDistanceM * idealEmitterTargetDistanceM -
+              horizontalEmitterTargetDistanceM * horizontalEmitterTargetDistanceM,
+            0
+          )
+        );
+        const verticalSeparationM = clamp(
+          preferredVerticalSeparationM,
+          MIN_ENGAGEMENT_CLEARANCE_M,
+          maxVerticalSeparationM
+        );
+        const objective = vec3(
+          treeCenter.x + radialDirection.x * objectiveRadiusM,
+          target.position.y + verticalSeparationM,
+          treeCenter.z + radialDirection.z * objectiveRadiusM
+        );
+        const plannedEmitterTargetDistanceM = distance(objective, target.position);
+        const focusDistanceErrorM = Math.abs(
+          plannedEmitterTargetDistanceM - idealEmitterTargetDistanceM
+        );
+
+        return {
+          objective,
+          plannedEmitterTargetDistanceM,
+          focusDistanceErrorM,
+          insideRayleighZone: focusDistanceErrorM <= this.safetyMetrics.rayleighRangeM + 1e-6
+        };
+      }
+    }
 
     let verticalSeparationM: number;
     let plannedEmitterTargetDistanceM: number;
@@ -861,21 +941,53 @@ export class MissionEngine {
   }
 
   private computeEngagementPoint(target: TargetState): Vec3 {
-    return this.computeEngagementGeometry(target).objective;
+    const geometry = this.computeEngagementGeometry(target);
+    const fieldProfile = getFieldProfile(this.params.fieldType);
+
+    if (fieldProfile.cropVisualStyle !== "orchard") {
+      return geometry.objective;
+    }
+
+    const transitAltitudeM = Math.max(
+      this.params.searchAltitudeM,
+      fieldProfile.maturePlantHeightM + ORCHARD_CANOPY_CLEARANCE_M + 0.7
+    );
+    const rowTransferGapM = Math.abs(this.drone.position.z - geometry.objective.z);
+
+    if (rowTransferGapM > this.params.rowSpacingM * 0.35) {
+      if (this.drone.position.y < transitAltitudeM - 0.12) {
+        return vec3(this.drone.position.x, transitAltitudeM, this.drone.position.z);
+      }
+
+      return vec3(geometry.objective.x, transitAltitudeM, geometry.objective.z);
+    }
+
+    return geometry.objective;
   }
 
-  private engagementDistanceToleranceM(): number {
-    return Math.max(
+  private engagementDistanceToleranceM(target?: TargetState): number {
+    const baseToleranceM = Math.max(
       MIN_OPTICS_DISTANCE_TOLERANCE_M,
       Math.min(this.safetyMetrics.rayleighRangeM * 0.35, 0.22)
     );
+
+    if (target) {
+      const fieldProfile = getFieldProfile(this.params.fieldType);
+      if (fieldProfile.cropVisualStyle === "orchard") {
+        const orchardToleranceFloorM =
+          target.position.y >= fieldProfile.maturePlantHeightM * 0.82 ? 0.015 : 0.03;
+        return Math.max(this.safetyMetrics.rayleighRangeM, orchardToleranceFloorM);
+      }
+    }
+
+    return baseToleranceM;
   }
 
   private engagementLateralToleranceM(target: TargetState): number {
     const geometry = this.computeEngagementGeometry(target);
     const verticalSeparationM = Math.max(geometry.objective.y - target.position.y, 0);
     const maxDistanceM =
-      geometry.plannedEmitterTargetDistanceM + this.engagementDistanceToleranceM();
+      geometry.plannedEmitterTargetDistanceM + this.engagementDistanceToleranceM(target);
     return Math.max(
       0.08,
       Math.sqrt(Math.max(maxDistanceM * maxDistanceM - verticalSeparationM * verticalSeparationM, 0))
@@ -985,6 +1097,10 @@ export class MissionEngine {
       return 0;
     }
 
+    if (remainingDistanceM < 0.8) {
+      return clamp(remainingDistanceM * 1.1 + 0.06, 0.08, 0.7);
+    }
+
     const horizontalVelocity = vec3(this.drone.velocity.x, 0, this.drone.velocity.z);
     const closingSpeedMps = dot(horizontalVelocity, targetDirection);
     const brakingDistanceM =
@@ -992,6 +1108,13 @@ export class MissionEngine {
       (2 * maxHorizontalAccelMps2);
 
     if (closingSpeedMps <= 0.05) {
+      if (remainingDistanceM < 1.2) {
+        return Math.min(
+          this.params.cruiseSpeedMps,
+          clamp(remainingDistanceM * 1.6 + 0.12, 0.18, MIN_RECAPTURE_SPEED_MPS)
+        );
+      }
+
       return Math.min(
         this.params.cruiseSpeedMps,
         Math.max(
@@ -1010,6 +1133,177 @@ export class MissionEngine {
       MIN_APPROACH_SPEED_MPS,
       this.params.cruiseSpeedMps
     );
+  }
+
+  private computeOrchardAvoidanceVelocity(
+    desiredHorizontalVelocity: Vec3
+  ): Vec3 {
+    const fieldProfile = getFieldProfile(this.params.fieldType);
+    if (
+      fieldProfile.cropVisualStyle !== "orchard" ||
+      horizontalLength(desiredHorizontalVelocity) <= 1e-6 ||
+      this.drone.position.y > fieldProfile.maturePlantHeightM + ORCHARD_CANOPY_CLEARANCE_M
+    ) {
+      return desiredHorizontalVelocity;
+    }
+
+    const activeTarget =
+      this.drone.activeTargetId !== null ? this.targets[this.drone.activeTargetId] : null;
+    const activeTargetOnTop =
+      activeTarget !== null && activeTarget.position.y >= fieldProfile.maturePlantHeightM * 0.82;
+    const activeTargetTreeCenter =
+      activeTarget?.supportPosition ??
+      (activeTarget
+        ? orchardTreeCenter(activeTarget.rowIndex, activeTarget.position.x, this.params, fieldProfile)
+        : null);
+
+    let adjustedVelocity = desiredHorizontalVelocity;
+    const avoidanceRadiusM = fieldProfile.canopyRadiusM + ORCHARD_CANOPY_CLEARANCE_M;
+    const nearbyTrees = enumerateNearbyOrchardTreeCenters(
+      this.drone.position,
+      this.params,
+      fieldProfile,
+      1,
+      1
+    );
+
+    for (let index = 0; index < nearbyTrees.length; index += 1) {
+      const tree = nearbyTrees[index];
+      const isActiveTargetTree =
+        activeTargetTreeCenter !== null &&
+        Math.abs(tree.x - activeTargetTreeCenter.x) <= 1e-6 &&
+        Math.abs(tree.z - activeTargetTreeCenter.z) <= 1e-6;
+      if (
+        isActiveTargetTree &&
+        activeTargetOnTop &&
+        this.drone.position.y >= fieldProfile.maturePlantHeightM + 0.14
+      ) {
+        continue;
+      }
+
+      const rel = vec3(tree.x - this.drone.position.x, 0, tree.z - this.drone.position.z);
+      const distanceToTreeM = horizontalLength(rel);
+      if (distanceToTreeM <= 1e-6 || distanceToTreeM > avoidanceRadiusM + ORCHARD_CANOPY_INFLUENCE_M) {
+        continue;
+      }
+
+      const treeDirection = horizontalNormalize(rel);
+      const awayDirection = scale(treeDirection, -1);
+      const tangentDirection = vec3(-treeDirection.z, 0, treeDirection.x);
+      const relativeSpeedSq = Math.max(dot(adjustedVelocity, adjustedVelocity), 1e-6);
+      const timeToClosestApproachS = clamp(
+        dot(rel, adjustedVelocity) / relativeSpeedSq,
+        0,
+        1.1
+      );
+      const closestApproachVector = subtract(
+        rel,
+        scale(adjustedVelocity, timeToClosestApproachS)
+      );
+      const closestApproachDistanceM = horizontalLength(closestApproachVector);
+      const collisionRisk =
+        distanceToTreeM <= avoidanceRadiusM + 0.18 ||
+        closestApproachDistanceM <= avoidanceRadiusM;
+
+      if (!collisionRisk) {
+        continue;
+      }
+
+      const alongTreeMps = dot(adjustedVelocity, treeDirection);
+      const tangentialMps = dot(adjustedVelocity, tangentDirection);
+      const maxClosingSpeedMps = Math.sqrt(
+        Math.max(2 * Math.max(this.params.maxHorizontalAccelMps2, 0.1) * Math.max(distanceToTreeM - avoidanceRadiusM, 0), 0)
+      );
+      const limitedAlongTreeMps = Math.min(alongTreeMps, maxClosingSpeedMps);
+      const avoidanceStrength =
+        clamp((avoidanceRadiusM + ORCHARD_CANOPY_INFLUENCE_M - Math.min(distanceToTreeM, closestApproachDistanceM)) / ORCHARD_CANOPY_INFLUENCE_M, 0, 1) *
+        ORCHARD_CANOPY_EVASION_MPS;
+      const tangentSign = dot(tangentDirection, adjustedVelocity) >= 0 ? 1 : -1;
+
+      adjustedVelocity = add(
+        add(
+          scale(treeDirection, limitedAlongTreeMps),
+          scale(tangentDirection, tangentialMps + tangentSign * avoidanceStrength * 0.8)
+        ),
+        scale(awayDirection, avoidanceStrength)
+      );
+    }
+
+    return adjustedVelocity;
+  }
+
+  private computeGreenhouseAvoidanceVelocity(
+    desiredHorizontalVelocity: Vec3
+  ): Vec3 {
+    const fieldProfile = getFieldProfile(this.params.fieldType);
+    if (
+      fieldProfile.cropVisualStyle !== "greenhouse" ||
+      horizontalLength(desiredHorizontalVelocity) <= 1e-6 ||
+      this.drone.position.y >= GREENHOUSE_GUTTER_HEIGHT_M - 0.2
+    ) {
+      return desiredHorizontalVelocity;
+    }
+
+    let adjustedVelocity = desiredHorizontalVelocity;
+    const clearanceRadiusM = GREENHOUSE_COLUMN_RADIUS_M + GREENHOUSE_COLUMN_CLEARANCE_M;
+    const columns = enumerateNearbyGreenhouseColumns(this.drone.position, this.params, 1, 1);
+
+    for (let index = 0; index < columns.length; index += 1) {
+      const column = columns[index];
+      const rel = vec3(column.x - this.drone.position.x, 0, column.z - this.drone.position.z);
+      const distanceToColumnM = horizontalLength(rel);
+      if (
+        distanceToColumnM <= 1e-6 ||
+        distanceToColumnM > clearanceRadiusM + GREENHOUSE_COLUMN_INFLUENCE_M
+      ) {
+        continue;
+      }
+
+      const columnDirection = horizontalNormalize(rel);
+      const awayDirection = scale(columnDirection, -1);
+      const tangentDirection = vec3(-columnDirection.z, 0, columnDirection.x);
+      const relativeSpeedSq = Math.max(dot(adjustedVelocity, adjustedVelocity), 1e-6);
+      const timeToClosestApproachS = clamp(dot(rel, adjustedVelocity) / relativeSpeedSq, 0, 1);
+      const closestApproachVector = subtract(rel, scale(adjustedVelocity, timeToClosestApproachS));
+      const closestApproachDistanceM = horizontalLength(closestApproachVector);
+      const collisionRisk =
+        distanceToColumnM <= clearanceRadiusM + 0.12 ||
+        closestApproachDistanceM <= clearanceRadiusM;
+
+      if (!collisionRisk) {
+        continue;
+      }
+
+      const alongColumnMps = dot(adjustedVelocity, columnDirection);
+      const tangentialMps = dot(adjustedVelocity, tangentDirection);
+      const maxClosingSpeedMps = Math.sqrt(
+        Math.max(
+          2 *
+            Math.max(this.params.maxHorizontalAccelMps2, 0.1) *
+            Math.max(distanceToColumnM - clearanceRadiusM, 0),
+          0
+        )
+      );
+      const limitedAlongColumnMps = Math.min(alongColumnMps, maxClosingSpeedMps);
+      const evasionStrength =
+        clamp(
+          (clearanceRadiusM + GREENHOUSE_COLUMN_INFLUENCE_M - Math.min(distanceToColumnM, closestApproachDistanceM)) /
+            GREENHOUSE_COLUMN_INFLUENCE_M,
+          0,
+          1
+        ) * GREENHOUSE_COLUMN_EVASION_MPS;
+      const tangentSign = dot(tangentDirection, adjustedVelocity) >= 0 ? 1 : -1;
+
+      adjustedVelocity = add(
+        add(
+          scale(columnDirection, limitedAlongColumnMps),
+          scale(tangentDirection, tangentialMps + tangentSign * evasionStrength * 0.9)
+        ),
+        scale(awayDirection, evasionStrength * 0.8)
+      );
+    }
+
+    return adjustedVelocity;
   }
 
   private computeFarmerAvoidanceVelocity(
@@ -1139,6 +1433,10 @@ export class MissionEngine {
       horizontalNormalize(horizontalTarget),
       desiredHorizontalSpeed
     );
+    desiredHorizontalVelocity = this.computeGreenhouseAvoidanceVelocity(
+      desiredHorizontalVelocity
+    );
+    desiredHorizontalVelocity = this.computeOrchardAvoidanceVelocity(desiredHorizontalVelocity);
     desiredHorizontalVelocity = this.computeFarmerAvoidanceVelocity(
       desiredHorizontalVelocity
     );
@@ -1278,7 +1576,9 @@ export class MissionEngine {
         const plannedEmitterTargetDistanceM = activeTarget
           ? this.computeEngagementGeometry(activeTarget).plannedEmitterTargetDistanceM
           : Number.POSITIVE_INFINITY;
-        const engagementDistanceToleranceM = this.engagementDistanceToleranceM();
+        const engagementDistanceToleranceM = activeTarget
+          ? this.engagementDistanceToleranceM(activeTarget)
+          : this.engagementDistanceToleranceM();
         const handoffRadiusM = activeTarget
           ? this.engagementLateralToleranceM(activeTarget)
           : DEFAULT_APPROACH_HANDOFF_RADIUS_M;
@@ -1305,6 +1605,11 @@ export class MissionEngine {
         const plannedEmitterTargetDistanceM = activeTarget
           ? this.computeEngagementGeometry(activeTarget).plannedEmitterTargetDistanceM
           : Number.POSITIVE_INFINITY;
+        const focusDistanceErrorM = Math.abs(
+          targetDistanceM - this.safetyMetrics.focalDistanceM
+        );
+        const insideRayleighZone =
+          focusDistanceErrorM <= this.safetyMetrics.rayleighRangeM + 1e-6;
         if (activeTarget) {
           activeTarget.engagementProgress = clamp(
             this.modeTimerS / Math.max(this.params.aimDurationS, 0.01),
@@ -1316,7 +1621,8 @@ export class MissionEngine {
         if (
           this.modeTimerS >= this.params.aimDurationS &&
           Math.abs(targetDistanceM - plannedEmitterTargetDistanceM) <=
-            this.engagementDistanceToleranceM() &&
+            this.engagementDistanceToleranceM(activeTarget ?? undefined) &&
+          insideRayleighZone &&
           horizontalSpeed <= this.params.maxFiringSpeedMps + 1e-3
         ) {
           this.requiredFiringDwellS =
@@ -1328,9 +1634,17 @@ export class MissionEngine {
             targetDistanceM,
             plannedEmitterTargetDistanceM,
             requiredFiringDwellS: this.requiredFiringDwellS,
-            insideRayleighZone:
-              Math.abs(targetDistanceM - this.safetyMetrics.focalDistanceM) <=
-              this.safetyMetrics.rayleighRangeM
+            insideRayleighZone
+          });
+        } else if (
+          this.modeTimerS >= this.params.aimDurationS + AIM_RELOCK_AFTER_S &&
+          !insideRayleighZone
+        ) {
+          this.transitionTo("approach", "optics lock stayed outside Rayleigh window", {
+            targetId: this.drone.activeTargetId,
+            targetDistanceM,
+            focusDistanceErrorM,
+            plannedEmitterTargetDistanceM
           });
         }
         break;
@@ -1340,6 +1654,19 @@ export class MissionEngine {
           this.drone.activeTargetId !== null ? this.targets[this.drone.activeTargetId] : null;
         if (activeTarget) {
           activeTarget.engagementProgress = 1;
+          const targetDistanceM = distance(this.drone.position, activeTarget.position);
+          const focusDistanceErrorM = Math.abs(
+            targetDistanceM - this.safetyMetrics.focalDistanceM
+          );
+          if (focusDistanceErrorM > this.safetyMetrics.rayleighRangeM + 1e-6) {
+            activeTarget.engagementProgress = 0.82;
+            this.transitionTo("aiming", "beam lock drifted outside Rayleigh window", {
+              targetId: this.drone.activeTargetId,
+              targetDistanceM,
+              focusDistanceErrorM
+            });
+            break;
+          }
         }
 
         if (this.modeTimerS >= this.requiredFiringDwellS) {

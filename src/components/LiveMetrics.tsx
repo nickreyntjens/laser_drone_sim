@@ -1,4 +1,5 @@
 import { MODE_LABELS } from "../sim/defaults";
+import { getFieldProfile } from "../sim/fieldProfiles";
 import { SimulationSnapshot } from "../sim/types";
 import {
   formatCurrencyUsd,
@@ -31,6 +32,7 @@ function MetricCard({ label, value, tone = "default" }: MetricCardProps): JSX.El
 
 export function LiveMetrics({ snapshot, isIntroActive }: LiveMetricsProps): JSX.Element {
   const { drone, metrics } = snapshot;
+  const fieldProfile = getFieldProfile(snapshot.params.fieldType);
 
   return (
     <section className="panel">
@@ -50,7 +52,7 @@ export function LiveMetrics({ snapshot, isIntroActive }: LiveMetricsProps): JSX.
         <MetricCard label="Power draw" value={formatPower(drone.instantaneousPowerW)} />
         <MetricCard label="Mission time" value={formatDuration(metrics.missionElapsedS)} />
         <MetricCard label="Energy used" value={formatEnergy(metrics.totalEnergyWh)} />
-        <MetricCard label="Beetles remaining" value={String(metrics.beetlesRemaining)} />
+        <MetricCard label="Targets remaining" value={String(metrics.beetlesRemaining)} />
         <MetricCard label="Recharge cycles" value={String(metrics.rechargeCycles)} />
       </div>
 
@@ -58,7 +60,7 @@ export function LiveMetrics({ snapshot, isIntroActive }: LiveMetricsProps): JSX.
         {isIntroActive ? (
           <div className="telemetry-row">
             <span>Pre-roll</span>
-            <strong>Beetles settling onto the crop canopy</strong>
+            <strong>{fieldProfile.introSettlingLabel}</strong>
           </div>
         ) : null}
         <div className="telemetry-row">
@@ -70,7 +72,7 @@ export function LiveMetrics({ snapshot, isIntroActive }: LiveMetricsProps): JSX.
           <strong>{formatDuration(metrics.averageTimePerTargetS)}</strong>
         </div>
         <div className="telemetry-row">
-          <span>Energy per beetle</span>
+          <span>Energy per target</span>
           <strong>{formatEnergy(metrics.energyPerBeetleWh)}</strong>
         </div>
         <div className="telemetry-row">

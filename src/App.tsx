@@ -22,8 +22,9 @@ import {
   clamp,
   defaultParameters
 } from "./sim/defaults";
+import { applyFieldTypePreset } from "./sim/fieldProfiles";
 import { calculateSafetyMetrics, safetyInputFromParameters } from "./sim/safety";
-import { MissionLogEvent, SimulationParameters } from "./sim/types";
+import { FieldType, MissionLogEvent, SimulationParameters } from "./sim/types";
 
 type CameraMode = "follow" | "overview" | "dock" | "manual";
 type OverlayScreen =
@@ -145,7 +146,7 @@ const TUTORIAL_STEPS: TutorialStep[] = [
     id: "setup",
     selector: '[data-tutorial-id="setup-button"]',
     title: "Setup",
-    body: "Configure beetle pressure, field size, drone properties, firing limits, and recharge assumptions."
+    body: "Configure field type, pest pressure, drone properties, firing limits, and recharge assumptions."
   },
   {
     id: "telemetry",
@@ -317,10 +318,22 @@ export default function App(): JSX.Element {
     key: K,
     value: SimulationParameters[K]
   ): void => {
-    setDraftParams((current) => ({
-      ...current,
-      [key]: value
-    }));
+    setDraftParams((current) =>
+      key === "fieldType"
+        ? applyFieldTypePreset(current, value as SimulationParameters["fieldType"])
+        : {
+            ...current,
+            [key]: value
+          }
+    );
+  };
+
+  const applyFieldTypeSelection = (fieldType: FieldType): void => {
+    const nextParams = applyFieldTypePreset(activeParams, fieldType);
+    setActiveParams(nextParams);
+    setDraftParams(nextParams);
+    setFarmerSafetyToast(null);
+    setScenarioVersion((value) => value + 1);
   };
 
   const closeSafetyZoneEditor = (resumeMission = safetyEditorResumeRef.current): void => {
@@ -624,6 +637,8 @@ export default function App(): JSX.Element {
             playbackSpeed={playbackSpeed}
             playbackSpeedOptions={[...PLAYBACK_SPEED_OPTIONS]}
             onPlaybackSpeedChange={setPlaybackSpeed}
+            fieldType={activeParams.fieldType}
+            onFieldTypeChange={applyFieldTypeSelection}
             cameraMode={cameraMode}
             onCameraModeChange={setCameraMode}
             safetyEditorPreview={safetyEditorActive ? safetyEditorPreview : null}

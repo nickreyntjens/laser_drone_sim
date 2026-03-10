@@ -1,5 +1,6 @@
 import { SimulationParameters } from "../sim/types";
 import { formatDecimal, formatHectares, formatKiloWattHours } from "../lib/format";
+import { getFieldProfile } from "../sim/fieldProfiles";
 
 interface ControlPanelProps {
   activeParams: SimulationParameters;
@@ -144,6 +145,7 @@ export function ControlPanel({
 }: ControlPanelProps): JSX.Element {
   const activeFieldAreaSqM = activeParams.fieldLengthM * activeParams.fieldWidthM;
   const draftShotEnergyJ = draftParams.laserPowerW * draftParams.engagementDwellS;
+  const draftFieldProfile = getFieldProfile(draftParams.fieldType);
 
   return (
     <section className="panel">
@@ -163,7 +165,7 @@ export function ControlPanel({
           Restart mission
         </button>
         <button className="secondary-button" onClick={onRandomize}>
-          Randomize beetles
+          {draftFieldProfile.randomizeActionLabel}
         </button>
         <button className="secondary-button" onClick={onEditSafetyZone}>
           Edit nominal safety zone
@@ -181,6 +183,42 @@ export function ControlPanel({
       <div className="control-grid">
         <div className="control-group">
           <div className="control-title-row">
+            <h3>Field type</h3>
+            <span>{draftFieldProfile.label}</span>
+          </div>
+          <ChoiceField
+            label="Crop and pest"
+            paramKey="fieldType"
+            value={draftParams.fieldType}
+            onParamChange={onParamChange}
+            helpText="Switches the crop visuals, target appearance, and field defaults for row spacing, search altitude, and engagement height."
+            options={[
+              {
+                label: "Potato / beetle",
+                value: "potatoColoradoBeetle",
+                description: "Colorado potato beetles on potato canopy rows."
+              },
+              {
+                label: "Rice / egg mass",
+                value: "riceYellowStemBorerEgg",
+                description: "White yellow stem borer egg masses placed near rice leaf tips."
+              },
+              {
+                label: "Orchard / stink bug",
+                value: "orchardMarmoratedStinkBug",
+                description: "Brown marmorated stink bugs distributed across orchard canopy tops and side faces."
+              },
+              {
+                label: "Greenhouse / caterpillar",
+                value: "greenhouseTulipCaterpillar",
+                description: "Tulip caterpillars on indoor tulip leaves, with greenhouse support structure avoidance."
+              }
+            ]}
+          />
+        </div>
+
+        <div className="control-group">
+          <div className="control-title-row">
             <h3>Mission mode</h3>
             <span>
               {draftParams.targetingMode === "preSurveyed" ? "Pre-surveyed route" : "Live detection sweep"}
@@ -191,17 +229,17 @@ export function ControlPanel({
             paramKey="targetingMode"
             value={draftParams.targetingMode}
             onParamChange={onParamChange}
-            helpText="Choose whether the drone searches for beetles live or flies directly to beetles already identified in prior scouting imagery."
+            helpText="Choose whether the drone searches for pests live or flies directly to target coordinates already identified in prior scouting imagery."
             options={[
               {
                 label: "Live search",
                 value: "search",
-                description: "The drone sweeps the field, detects beetles during flight, and then engages them."
+                description: "The drone sweeps the field, detects targets during flight, and then engages them."
               },
               {
                 label: "Known locations",
                 value: "preSurveyed",
-                description: "The drone assumes beetle coordinates are already known from prior drone footage and routes directly to them."
+                description: "The drone assumes target coordinates are already known from prior drone footage and routes directly to them."
               }
             ]}
           />
@@ -215,12 +253,12 @@ export function ControlPanel({
               {
                 label: "Selected only",
                 value: true,
-                description: "Only the actively selected beetle keeps a marker beacon on screen."
+                description: "Only the actively selected target keeps a marker beacon on screen."
               },
               {
                 label: "Show all",
                 value: false,
-                description: "Every beetle marker stays visible, which is useful for debugging or overview shots."
+                description: "Every target marker stays visible, which is useful for debugging or overview shots."
               }
             ]}
           />
@@ -261,7 +299,7 @@ export function ControlPanel({
             min={100}
             max={2000}
             step={25}
-            unit="beetles / ha"
+            unit={draftFieldProfile.pressureUnitLabel}
             value={draftParams.edgeDensityPerHectare}
             onParamChange={onParamChange}
             digits={0}

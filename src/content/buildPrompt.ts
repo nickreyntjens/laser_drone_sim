@@ -3,7 +3,7 @@ export const BUILD_PROMPT = `In ChatGPT codex version 5.4 paste the following:
 Inspect the GitHub repo for the current implementation and design baseline before making changes:
 https://github.com/nickreyntjens/laser_drone_sim
 
-Build a browser-based visual simulation for https://photonicinsecticides.com that demonstrates the feasibility of a laser-equipped drone eliminating Colorado potato beetles in a potato field.
+Build a browser-based visual simulation for https://photonicinsecticides.com that demonstrates the feasibility of a laser-equipped drone eliminating crop pests in multiple field types.
 
 The simulation must do two things at once:
 
@@ -14,7 +14,7 @@ The simulation must do two things at once:
 
 2. Be visually impressive enough that a non-expert visitor intuitively understands:
 - a drone can patrol a field,
-- detect beetles,
+- detect pests,
 - fire a laser at them,
 - manage energy intelligently,
 - and complete the job with realistic recharge cycles.
@@ -46,20 +46,25 @@ Include at least:
 
 Mission logic:
 - Drone starts from a charging dock at the field edge.
-- Drone patrols the field and engages all detected beetles.
+- Drone patrols the field and engages all detected targets.
 - When battery falls below a configurable safe threshold, it must return to dock, recharge, and resume.
-- Report total mission time, total energy consumed, recharge cycles, beetles eliminated, average time per target, energy per beetle, and energy fractions for flight, laser, hover, and acceleration.
+- Report total mission time, total energy consumed, recharge cycles, targets eliminated, average time per target, energy per target, and energy fractions for flight, laser, hover, and acceleration.
 
-Beetle distribution:
-- Model Colorado potato beetle invasion pressure entering from one field side.
+Field modes:
+- Include at least two selectable field types:
+  1. potato field with Colorado potato beetles
+  2. rice field with yellow stem borer egg masses on the tips of rice leaves
+
+Target distribution:
+- Model invasion pressure entering from one field side.
 - Use a stochastic spatial distribution whose density is highest near the invasion edge and decays with depth into the field.
 - A Poisson point process with a depth-dependent intensity gradient is a good starting point.
-- Beetle pressure should be expressed in beetles per hectare.
+- Pressure should be expressed per hectare with units that match the selected field type.
 - Default field size should be 10 hectares.
-- Default beetle pressure should be 400 beetles per hectare and adjustable up to 2000.
+- Default pressure should be 400 per hectare and adjustable up to 2000.
 
 Detection and engagement logic:
-- Beetles are discrete targets on or near crop rows.
+- Targets are discrete pest targets on or near crop rows or leaf tips depending on field type.
 - Support two mission modes:
   1. live-search mode, where the drone must detect beetles during a sweep
   2. pre-surveyed mode, where a prior scouting drone already identified all beetle locations
@@ -67,32 +72,32 @@ Detection and engagement logic:
 - Include realistic engagement phases: detect, stabilize/aim, fire for dwell time, confirm kill, move on.
 
 Visual/animation requirements:
-- 3D potato field scene
+- 3D field scenes for both potato and rice modes
 - visually appealing drone model
 - realistic drone motion: roll, pitch, smooth turning, subtle stabilization
 - visible laser firing events
-- beetles visibly disappear or are marked neutralized
+- targets visibly disappear or are marked neutralized
 - charging dock / base station
 - camera controls or curated camera angles
-- all beetles must be visible from the beginning of the intro sequence; they should not pop into existence later
-- have the beetles visibly fall onto the field at the beginning of the simulation
+- all targets must be visible from the beginning of the intro sequence; they should not pop into existence later
+- have the targets visibly fall onto the field at the beginning of the simulation
 - add an option to hide all non-selected target markers and make that the default so the viewport is less cluttered
 - add moving farmers as realistic scale references in the field and block firing whenever a farmer is inside the nominal laser safety zone
 
 UI requirements:
 - Setup, telemetry, mission report, and model notes must be pop-up panels/dialogs.
 - The app must support a compact small mode for use under a webpage hero, plus a larger immersive mode like a YouTube player expansion.
-    - In small mode, only mission time, field size, beetle pressure, state, and a "Get big and configure" control should appear on the visual canvas.
+    - In small mode, only mission time, field size, pest pressure, state, and a "Get big and configure" control should appear on the visual canvas.
     - In big mode, provide a clean-viewport mode that hides buttons, labels, and telemetry overlays, while keeping a single toggle visible so the user can restore the rest of the controls; the attitude / horizon instrument should remain visible in that mode.
     - Add a playback-speed dropdown with values 1x, 2x, 5.25x, 10.5x, 20x, and 40x, and default it to 1x.
     - If algorithmically possible, playback speed should change render-time speedup without degrading simulation time granularity; use fixed simulation substeps instead of simply multiplying the integrator timestep.
-    - Show main on-canvas telemetry in big mode: mission time, current speed, state, field size, beetle pressure, instantaneous power, battery remaining in kWh, and beetles neutralized.
+    - Show main on-canvas telemetry in big mode: mission time, current speed, state, field size, pest pressure, instantaneous power, battery remaining in kWh, and targets neutralized.
     - Add a compact artificial-horizon / attitude indicator in the top-right corner of the big viewport, roughly half the size of the previous instrument treatment.
     - Add contextual tooltips or small info icons for options whose meaning is not immediately obvious, such as Known locations and playback speed.
     - The first time the user expands into big mode, show a short guided tutorial with sequential callouts for Setup, Telemetry, and Playback. After that, expose a Tutorial button so the tour can be replayed on demand.
 - Expose parameters including:
   - field width and length
-  - beetle pressure
+  - pest pressure
   - invasion gradient strength
   - battery capacity
   - battery cycle life

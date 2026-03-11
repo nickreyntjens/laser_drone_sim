@@ -1,53 +1,124 @@
-import { useEffect, useMemo, useState } from "react";
-import { AimingLabScene } from "./AimingLabScene";
+import { useEffect, useRef, useState } from "react";
 import {
+  AIMING_SENSOR_HEIGHT_MM,
+  AIMING_SENSOR_WIDTH_MM,
+  AimingCommandGeneratorMode,
+  AimingHistoryPoint,
+  AimingLabEngine,
   AimingLabParameters,
-  AimingPlaybackCycle,
-  AimingSample,
+  AimingLiveSnapshot,
+  AimingPlaybackPhase,
   defaultAimingLabParameters,
-  downsampleAimingSamples,
-  runAimingSimulation
 } from "../sim/aiming";
 
 interface AimingLabPanelProps {
   params: AimingLabParameters;
   onChange: (patch: Partial<AimingLabParameters>) => void;
   onReset: () => void;
+  resetVersion: number;
 }
 
-type ShutterPlaybackStage = "open" | "close" | "centroid" | "command" | "delay";
+type ShutterPlaybackStage = AimingPlaybackPhase;
 
 const PLAYBACK_SPEED_OPTIONS = [1, 2, 5, 10, 20, 40];
-
-function sampleAtTime(samples: AimingSample[], timeS: number): AimingSample {
-  if (samples.length === 0) {
-    throw new Error("Aiming lab requires samples to render playback.");
+const COMMAND_GENERATOR_OPTIONS: Array<{
+  value: AimingCommandGeneratorMode;
+  label: string;
+  detail: string;
+}> = [
+  {
+    value: "direct",
+    label: "Direct",
+    detail: "One mirror command is issued for each centroid, then held until the next frame."
+  },
+  {
+    value: "pi",
+    label: "PI hold",
+    detail: "Uses the last centroid directly and holds it with PI / PID."
+  },
+  {
+    value: "integral",
+    label: "Integral predictor",
+    detail: "Extends the last centroid with velocity and filtered IMU feed-forward."
+  },
+  {
+    value: "frequency_phase",
+    label: "Frequency + phase",
+    detail: "Assumes a base oscillation and predicts the next phase of the motion."
+  },
+  {
+    value: "dmd_sliding_window",
+    label: "DMD sliding window",
+    detail: "Fits a local linear model over recent centroids and emits fresh commands on a fixed millisecond cadence."
   }
-  const index = Math.round(timeS / Math.max(samples[1]?.timeS ?? 0.001, 1e-6));
-  return samples[Math.min(samples.length - 1, Math.max(0, index))];
-}
+];
 
 function formatMrad(value: number): string {
   return `${value.toFixed(3)} mrad`;
 }
 
-function buildPath(
-  samples: AimingSample[],
+function buildTimePath(
+  samples: AimingHistoryPoint[],
   width: number,
   height: number,
-  selector: (sample: AimingSample) => number,
-  maxAbsValue: number
+  selector: (sample: AimingHistoryPoint) => number,
+  maxAbsValue: number,
+  currentTimeS: number,
+  windowDurationS: number
 ): string {
   if (samples.length === 0) {
     return "";
   }
-
   const safeMax = Math.max(maxAbsValue, 1e-6);
+  const windowStartS = currentTimeS - windowDurationS;
   return samples
     .map((sample, index) => {
-      const x = (index / Math.max(samples.length - 1, 1)) * width;
+      const x = ((sample.timeS - windowStartS) / Math.max(windowDurationS, 1e-6)) * width;
       const normalized = selector(sample) / safeMax;
       const y = height * 0.5 - normalized * height * 0.42;
+      return `${index === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`;
+    })
+    .join(" ");
+}
+
+function chartYForValue(value: number, maxAbsValue: number, height: number): number {
+  const safeMax = Math.max(maxAbsValue, 1e-6);
+  const normalized = value / safeMax;
+  return height * 0.5 - normalized * height * 0.42;
+}
+
+function sensorXPercent(valueMrad: number, halfRangeMrad: number): number {
+  return Math.min(96, Math.max(4, 50 + (valueMrad / Math.max(halfRangeMrad, 1e-6)) * 50));
+}
+
+function sensorYPercent(valueMrad: number, halfRangeMrad: number): number {
+  return Math.min(96, Math.max(4, 50 - (valueMrad / Math.max(halfRangeMrad, 1e-6)) * 50));
+}
+
+function renderSensorAxisLabels(): JSX.Element {
+  return (
+    <>
+      <span className="aiming-axis-label aiming-axis-label-top">{`${(AIMING_SENSOR_HEIGHT_MM * 0.5).toFixed(1)} mm`}</span>
+      <span className="aiming-axis-label aiming-axis-label-bottom">{`${(-AIMING_SENSOR_HEIGHT_MM * 0.5).toFixed(1)} mm`}</span>
+      <span className="aiming-axis-label aiming-axis-label-left">{`${(-AIMING_SENSOR_WIDTH_MM * 0.5).toFixed(1)} mm`}</span>
+      <span className="aiming-axis-label aiming-axis-label-right">{`${(AIMING_SENSOR_WIDTH_MM * 0.5).toFixed(1)} mm`}</span>
+    </>
+  );
+}
+
+function buildFramePath(
+  points: Array<{ xMrad: number; yMrad: number }>,
+  halfRangeMrad: number,
+  width: number,
+  height: number
+): string {
+  if (points.length === 0) {
+    return "";
+  }
+  return points
+    .map((point, index) => {
+      const x = (sensorXPercent(point.xMrad, halfRangeMrad) / 100) * width;
+      const y = (sensorYPercent(point.yMrad, halfRangeMrad) / 100) * height;
       return `${index === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`;
     })
     .join(" ");
@@ -92,167 +163,87 @@ function AimingSlider({
 export function AimingLabPanel({
   params,
   onChange,
-  onReset
+  onReset,
+  resetVersion
 }: AimingLabPanelProps): JSX.Element {
-  const result = useMemo(() => runAimingSimulation(params), [params]);
-  const chartSamples = useMemo(() => downsampleAimingSamples(result.samples, 480), [result.samples]);
-  const playbackCycles = result.playbackCycles;
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
-  const [mirrorVisualExaggeration, setMirrorVisualExaggeration] = useState(220);
-  const [playbackElapsedMs, setPlaybackElapsedMs] = useState(0);
+  const engineRef = useRef<AimingLabEngine>(new AimingLabEngine(params));
+  const [snapshot, setSnapshot] = useState<AimingLiveSnapshot>(engineRef.current.getSnapshot());
 
   useEffect(() => {
-    setPlaybackElapsedMs(0);
+    engineRef.current.updateParams(params);
+    setSnapshot(engineRef.current.getSnapshot());
   }, [params]);
 
   useEffect(() => {
-    if (playbackCycles.length === 0) {
-      return undefined;
-    }
+    engineRef.current = new AimingLabEngine(params);
+    setSnapshot(engineRef.current.getSnapshot());
+  }, [resetVersion]);
 
+  useEffect(() => {
     let frameHandle = 0;
     let previousTime = performance.now();
 
     const tick = (now: number): void => {
       const elapsedMs = now - previousTime;
       previousTime = now;
-      setPlaybackElapsedMs((current) => current + elapsedMs);
+      const simAdvanceS = (elapsedMs / 1000) * 0.001 * playbackSpeed;
+      engineRef.current.step(simAdvanceS);
+      setSnapshot(engineRef.current.getSnapshot());
       frameHandle = window.requestAnimationFrame(tick);
     };
 
     frameHandle = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(frameHandle);
-  }, [playbackCycles.length]);
+  }, [playbackSpeed]);
 
-  const playbackStages = useMemo(() => {
-    const cameraPeriodS = 1 / Math.max(params.cameraFps, 1);
-    const nextExposureDelayS = Math.max(
-      0,
-      cameraPeriodS - (params.exposureTimeMs + params.processingLatencyMs + params.driverLatencyMs) / 1000
-    );
-    return [
-      { key: "open" as const, durationMs: Math.max(450, (params.exposureTimeMs * 1000) / playbackSpeed) },
-      { key: "close" as const, durationMs: 500 / playbackSpeed },
-      { key: "centroid" as const, durationMs: Math.max(450, (params.processingLatencyMs * 1000) / playbackSpeed) },
-      { key: "command" as const, durationMs: Math.max(350, (params.driverLatencyMs * 1000) / playbackSpeed) },
-      { key: "delay" as const, durationMs: Math.max(350, (nextExposureDelayS * 1_000_000) / playbackSpeed) }
-    ];
-  }, [params.cameraFps, params.driverLatencyMs, params.exposureTimeMs, params.processingLatencyMs, playbackCycles, playbackSpeed]);
-  const totalCycleDurationMs = playbackStages.reduce((sum, stage) => sum + stage.durationMs, 0);
-  const cycleElapsedMs = playbackElapsedMs % Math.max(totalCycleDurationMs, 1);
-  const playbackCycleIndex =
-    playbackCycles.length > 0
-      ? Math.floor(playbackElapsedMs / Math.max(totalCycleDurationMs, 1)) % playbackCycles.length
-      : 0;
-  let playbackStage: ShutterPlaybackStage = "open";
-  let playbackStageProgress = 0;
-  let stageStartOffsetMs = 0;
-  for (const stage of playbackStages) {
-    if (cycleElapsedMs <= stageStartOffsetMs + stage.durationMs) {
-      playbackStage = stage.key;
-      playbackStageProgress = (cycleElapsedMs - stageStartOffsetMs) / Math.max(stage.durationMs, 1);
-      break;
-    }
-    stageStartOffsetMs += stage.durationMs;
-  }
-
-  const activeCycle = playbackCycles[Math.min(playbackCycleIndex, Math.max(playbackCycles.length - 1, 0))];
-  const nextCycle = playbackCycles[(playbackCycleIndex + 1) % Math.max(playbackCycles.length, 1)];
-  const nextExposureStartS =
-    nextCycle && playbackCycles.length > 1
-      ? nextCycle.exposureStartTimeS + (playbackCycleIndex === playbackCycles.length - 1 ? params.durationS : 0)
-      : (activeCycle?.exposureStartTimeS ?? 0) + 1 / Math.max(params.cameraFps, 1);
-  const stageSampleTimeS = (() => {
-    if (!activeCycle) {
-      return 0;
-    }
-    switch (playbackStage) {
-      case "open":
-        return activeCycle.exposureStartTimeS +
-          (activeCycle.exposureEndTimeS - activeCycle.exposureStartTimeS) * playbackStageProgress;
-      case "close":
-        return activeCycle.exposureEndTimeS;
-      case "centroid":
-        return activeCycle.exposureEndTimeS +
-          (activeCycle.measurementTimeS - activeCycle.exposureEndTimeS) * playbackStageProgress;
-      case "command":
-        return activeCycle.measurementTimeS +
-          (activeCycle.commandTimeS - activeCycle.measurementTimeS) * playbackStageProgress;
-      case "delay":
-        return activeCycle.commandTimeS +
-          (nextExposureStartS - activeCycle.commandTimeS) * playbackStageProgress;
-      default:
-        return activeCycle.exposureStartTimeS;
-    }
-  })();
-  const currentSample = activeCycle ? sampleAtTime(result.samples, stageSampleTimeS) : result.samples[0];
+  const currentSample = snapshot.currentSample;
+  const recentChartHistory = snapshot.recentHistory;
+  const playbackStage = snapshot.phase;
+  const visibleFrames = snapshot.captures;
+  const chartWindowDurationS = 0.18;
   const viewHalfRangeMrad = Math.max(params.cameraFovMrad * 0.5, 0.1);
-  const targetXPercent = 50 + (currentSample.pointingErrorMrad / viewHalfRangeMrad) * 50;
-  const measuredXPercent = 50 + ((activeCycle?.measuredPointingErrorMrad ?? 0) / viewHalfRangeMrad) * 50;
-  const smearWidthPercent =
-    ((activeCycle?.smearWidthMrad ?? 0) / Math.max(viewHalfRangeMrad * 2, 1e-6)) * 100;
-  const smearLeftPercent = 50 + ((((activeCycle?.actualPointingCentroidMrad ?? 0) - (activeCycle?.smearWidthMrad ?? 0) * 0.5) / viewHalfRangeMrad) * 50);
-  const maxChartValue = Math.max(
+  const targetXPercent = sensorXPercent(currentSample.pointingErrorMrad, viewHalfRangeMrad);
+  const targetYPercent = sensorYPercent(currentSample.pointingErrorYMrad, viewHalfRangeMrad);
+  const targetChartMaxValue = Math.max(
     0.2,
-    ...chartSamples.map((sample) =>
-      Math.max(
-        Math.abs(sample.pointingErrorMrad),
-        Math.abs(sample.opticalTargetAngleMrad),
-        Math.abs(sample.mirrorAngleMrad),
-        Math.abs(sample.mirrorCommandMrad)
-      )
+    ...recentChartHistory.map((sample) =>
+      Math.max(Math.abs(sample.targetX), Math.abs(sample.targetY))
     )
   );
+  const commandChartMaxValue = Math.max(
+    0.2,
+    ...recentChartHistory.map((sample) =>
+      Math.max(Math.abs(sample.commandPitch), Math.abs(sample.commandRoll))
+    )
+  );
+  const mirrorChartMaxValue = Math.max(
+    0.2,
+    ...recentChartHistory.map((sample) =>
+      Math.max(Math.abs(sample.mirrorPitch), Math.abs(sample.mirrorRoll))
+    )
+  );
+  const temperatureChartMaxValue = Math.max(
+    80,
+    ...recentChartHistory.map((sample) => sample.targetTemperatureC)
+  );
+  const shotsChartMaxValue = Math.max(
+    1,
+    ...recentChartHistory.map((sample) => sample.shotsPerSecond)
+  );
+  const selectedCommandGenerator =
+    COMMAND_GENERATOR_OPTIONS.find((option) => option.value === params.commandGeneratorMode) ??
+    COMMAND_GENERATOR_OPTIONS[0];
+  const laserSpotWidthPercent = (params.laserSpotDiameterMm / AIMING_SENSOR_WIDTH_MM) * 100;
+  const laserSpotHeightPercent = (params.laserSpotDiameterMm / AIMING_SENSOR_HEIGHT_MM) * 100;
+  const occupancyThresholdY = chartYForValue(params.laserEngageCoveragePct, 100, 220);
+  const lethalThresholdY = chartYForValue(params.targetLethalTemperatureC, temperatureChartMaxValue, 220);
 
   const stageAnnotations = [
     `Gimbal removes about ${params.gimbalSuppressionPct.toFixed(0)}% of low-frequency platform motion.`,
     `Pads remove about ${params.dampingSuppressionPct.toFixed(0)}% of high-frequency vibration before the camera sees it.`,
-    `Camera + processing + driver add about ${result.metrics.measuredLatencyMs.toFixed(1)} ms total loop latency.`
+    `Camera + processing + driver add about ${snapshot.metrics.measuredLatencyMs.toFixed(1)} ms total loop latency.`
   ];
-  const stageDescriptions: Record<ShutterPlaybackStage, string> = {
-    open: "1. Shutter opens. The live target keeps moving on the sensor and the open exposure accumulates that path into a smear.",
-    close: "2. Shutter closes. That exposure is now frozen as a frame and inserted at the top of the captured-frame stack.",
-    centroid: "3. The frozen smear is reduced to a centroid. That centroid becomes the last known location of the target.",
-    command: "4. The controller computes a correction and sends a command toward the MEMS mirror.",
-    delay: "5. Before the next shutter opens, the mirror keeps moving and settling while the live target keeps drifting."
-  };
-  const visibleFrames = useMemo(() => {
-    if (!activeCycle) {
-      return [];
-    }
-    const includeActive = playbackStage !== "open";
-    const frames: Array<{
-      index: number;
-      cycle: AimingPlaybackCycle;
-      isActive: boolean;
-      status: string;
-    }> = [];
-    if (includeActive) {
-      frames.push({
-        index: 1,
-        cycle: activeCycle,
-        isActive: true,
-        status:
-          playbackStage === "close"
-            ? "new frame created"
-            : playbackStage === "centroid"
-              ? "calculating centroid"
-              : playbackStage === "command"
-                ? "command sent"
-                : "stored frame"
-      });
-    }
-    for (let offset = 1; frames.length < 5 && offset < playbackCycles.length; offset += 1) {
-      const cycleIndex = (playbackCycleIndex - offset + playbackCycles.length) % playbackCycles.length;
-      frames.push({
-        index: frames.length + 1,
-        cycle: playbackCycles[cycleIndex],
-        isActive: false,
-        status: "stored frame"
-      });
-    }
-    return frames;
-  }, [activeCycle, playbackCycleIndex, playbackCycles, playbackStage]);
 
   return (
     <div className="panel-shell aiming-lab">
@@ -261,9 +252,9 @@ export function AimingLabPanel({
           <span className="eyebrow">Aiming lab</span>
           <h2>MEMS mirror and camera loop</h2>
           <p>
-            This section isolates the fine aiming loop at shutter level: exposure while the target is
-            projected on the sensor, smear and centroid extraction after shutter close, processing delay,
-            driver delay, PID control, and MEMS mirror settling.
+            This section runs a stateful shutter-level loop: exposure while the target is projected on the sensor,
+            smear and centroid extraction after shutter close, processing delay, driver delay, PID control, and MEMS
+            mirror settling.
           </p>
         </div>
         <button className="secondary-button" onClick={onReset}>
@@ -274,20 +265,22 @@ export function AimingLabPanel({
       <div className="aiming-metrics">
         <div className="metric-card">
           <span>RMS pointing error</span>
-          <strong>{formatMrad(result.metrics.rmsPointingErrorMrad)}</strong>
+          <strong>{formatMrad(snapshot.metrics.rmsPointingErrorMrad)}</strong>
         </div>
         <div className="metric-card">
           <span>Peak error</span>
-          <strong>{formatMrad(result.metrics.peakPointingErrorMrad)}</strong>
+          <strong>{formatMrad(snapshot.metrics.peakPointingErrorMrad)}</strong>
         </div>
         <div className="metric-card">
           <span>Within lock window</span>
-          <strong>{result.metrics.lockFractionPct.toFixed(1)}%</strong>
+          <strong>{snapshot.metrics.lockFractionPct.toFixed(1)}%</strong>
         </div>
         <div className="metric-card">
           <span>Step settling</span>
           <strong>
-            {result.metrics.settlingTimeMs === null ? "No settle" : `${result.metrics.settlingTimeMs.toFixed(0)} ms`}
+            {snapshot.metrics.settlingTimeMs === null
+              ? "No settle"
+              : `${snapshot.metrics.settlingTimeMs.toFixed(0)} ms`}
           </strong>
         </div>
       </div>
@@ -337,138 +330,274 @@ export function AimingLabPanel({
 
       <div className="aiming-layout">
         <div className="aiming-visuals">
-          <div className="aiming-live-grid">
+          <div className="aiming-top-charts">
             <div className="aiming-viewport-card">
               <div className="aiming-viewport-header">
-                <span>Living beam-steering diagram</span>
-                <strong>{currentSample.timeS.toFixed(2)} s</strong>
+                <span>Target XY motion over time</span>
+                <strong>{snapshot.simTimeS.toFixed(2)} s</strong>
               </div>
-              <AimingLabScene
-                sample={currentSample}
-                showMeasuredPoint={playbackStage !== "open" && playbackStage !== "close"}
-                mirrorVisualExaggeration={mirrorVisualExaggeration}
-              />
-              <div className="aiming-viewport-readout">
-                <span>Mirror angle: {formatMrad(currentSample.mirrorAngleMrad)}</span>
-                <span>Command: {formatMrad(currentSample.mirrorCommandMrad)}</span>
-                <span>Centroid: {formatMrad(activeCycle?.measuredPointingErrorMrad ?? 0)}</span>
-                <span>Smear width: {formatMrad(activeCycle?.smearWidthMrad ?? 0)}</span>
-                <span>Visual exaggeration: {mirrorVisualExaggeration.toFixed(0)}x</span>
+              <svg viewBox="0 0 420 220" className="aiming-chart-svg" aria-label="Target XY motion over time">
+                <line x1="20" y1="20" x2="20" y2="200" className="aiming-chart-axis" />
+                <line x1="20" y1="110" x2="400" y2="110" className="aiming-chart-axis" />
+                <path
+                  d={buildTimePath(
+                    recentChartHistory,
+                    420,
+                    220,
+                    (sample) => sample.targetX,
+                    targetChartMaxValue,
+                    snapshot.simTimeS,
+                    chartWindowDurationS
+                  )}
+                  className="aiming-chart-path-target"
+                />
+                <path
+                  d={buildTimePath(
+                    recentChartHistory,
+                    420,
+                    220,
+                    (sample) => sample.targetY,
+                    targetChartMaxValue,
+                    snapshot.simTimeS,
+                    chartWindowDurationS
+                  )}
+                  className="aiming-chart-path-platform"
+                />
+              </svg>
+              <div className="aiming-chart-legend">
+                <span className="legend-target">Target X</span>
+                <span className="legend-platform">Target Y</span>
               </div>
-              <p className="aiming-inline-note">
-                {stageDescriptions[playbackStage]} Yellow is the chief ray through the lens center. Green is
-                the focal ray that exits the lens parallel before the fold mirror. This side view shows the
-                single mirror tilt axis that steers the beam up and down on the sensor.
-              </p>
             </div>
 
-            <div className="aiming-viewport-card">
-              <div className="aiming-viewport-header">
-                <span>Live sensor and captured frames</span>
-                <strong>frame stack</strong>
-              </div>
-              <div className="aiming-viewport">
-                <div className="aiming-crosshair aiming-crosshair-horizontal" />
-                <div className="aiming-crosshair aiming-crosshair-vertical" />
-                {currentSample.shutterOpen ? (
-                  <div
-                    className="aiming-smear-bar"
-                    style={{
-                      left: `${Math.min(96, Math.max(4, smearLeftPercent))}%`,
-                      width: `${Math.min(92, Math.max(2, smearWidthPercent * playbackStageProgress))}%`
-                    }}
-                  />
-                ) : null}
-                <div
-                  className="aiming-target-dot"
-                  style={{ left: `${Math.min(96, Math.max(4, targetXPercent))}%` }}
+            <div className="aiming-chart-card aiming-chart-card-command">
+              <div className="aiming-chart-title">MEMS mirror commanded values</div>
+              <div className={`aiming-command-feed${snapshot.commandFeedActive ? " active" : ""}`} aria-hidden="true" />
+              <svg viewBox="0 0 420 220" className="aiming-chart-svg" aria-label="MEMS mirror commanded values over time">
+                <line x1="20" y1="20" x2="20" y2="200" className="aiming-chart-axis" />
+                <line x1="20" y1="110" x2="400" y2="110" className="aiming-chart-axis" />
+                <path
+                  d={buildTimePath(
+                    recentChartHistory,
+                    420,
+                    220,
+                    (sample) => sample.commandPitch,
+                    commandChartMaxValue,
+                    snapshot.simTimeS,
+                    chartWindowDurationS
+                  )}
+                  className="aiming-chart-path-command"
                 />
-                <div
-                  className="aiming-measurement-dot"
-                  hidden={playbackStage === "open" || playbackStage === "close"}
-                  style={{ left: `${Math.min(96, Math.max(4, measuredXPercent))}%` }}
+                <path
+                  d={buildTimePath(
+                    recentChartHistory,
+                    420,
+                    220,
+                    (sample) => sample.commandRoll,
+                    commandChartMaxValue,
+                    snapshot.simTimeS,
+                    chartWindowDurationS
+                  )}
+                  className="aiming-chart-path-measurement"
                 />
-                <div className="aiming-viewport-label aiming-viewport-label-target">
-                  frame 0 live sensor
-                </div>
-                <div className="aiming-viewport-label aiming-viewport-label-measured">
-                  {currentSample.shutterOpen ? "shutter open: smear is accumulating" : "shutter closed: live target still moves"}
-                </div>
+              </svg>
+              <div className="aiming-chart-legend">
+                <span className="legend-command">Pitch command</span>
+                <span className="legend-measurement">Roll command</span>
               </div>
-              <div className="aiming-viewport-legend">
-                <span className="aiming-legend-item aiming-legend-item-target">True target on sensor</span>
-                <span className="aiming-legend-item aiming-legend-item-smear">Exposure smear while shutter is open</span>
-                <span className="aiming-legend-item aiming-legend-item-measured">Centroid sent into the controller</span>
+            </div>
+
+            <div className="aiming-chart-card">
+              <div className="aiming-chart-title">MEMS mirror pitch / roll over time</div>
+              <svg viewBox="0 0 420 220" className="aiming-chart-svg" aria-label="MEMS mirror pitch and roll over time">
+                <line x1="20" y1="20" x2="20" y2="200" className="aiming-chart-axis" />
+                <line x1="20" y1="110" x2="400" y2="110" className="aiming-chart-axis" />
+                <path
+                  d={buildTimePath(
+                    recentChartHistory,
+                    420,
+                    220,
+                    (sample) => sample.mirrorPitch,
+                    mirrorChartMaxValue,
+                    snapshot.simTimeS,
+                    chartWindowDurationS
+                  )}
+                  className="aiming-chart-path-mirror"
+                />
+                <path
+                  d={buildTimePath(
+                    recentChartHistory,
+                    420,
+                    220,
+                    (sample) => sample.mirrorRoll,
+                    mirrorChartMaxValue,
+                    snapshot.simTimeS,
+                    chartWindowDurationS
+                  )}
+                  className="aiming-chart-path-platform"
+                />
+              </svg>
+              <div className="aiming-chart-legend">
+                <span className="legend-mirror">Pitch</span>
+                <span className="legend-platform">Roll</span>
               </div>
-              <div className="aiming-viewport-readout">
-                <span>Shutter: {currentSample.shutterOpen ? "open" : "closed"}</span>
-                <span>Exposure centroid: {formatMrad(currentSample.exposureCentroidMrad)}</span>
-                <span>Last known location: {formatMrad(currentSample.lastKnownTargetMrad)}</span>
+            </div>
+
+            <div className="aiming-chart-card">
+              <div className="aiming-chart-title">Target inside laser spot</div>
+              <svg viewBox="0 0 420 220" className="aiming-chart-svg" aria-label="Target inside laser spot over time">
+                <text x="8" y="24" className="aiming-chart-scale-text">100%</text>
+                <text x="8" y="212" className="aiming-chart-scale-text">0%</text>
+                <line x1="20" y1="20" x2="20" y2="200" className="aiming-chart-axis" />
+                <line x1="20" y1="200" x2="400" y2="200" className="aiming-chart-axis" />
+                <line x1="20" y1={occupancyThresholdY} x2="400" y2={occupancyThresholdY} className="aiming-chart-threshold" />
+                <path
+                  d={buildTimePath(
+                    recentChartHistory,
+                    420,
+                    220,
+                    (sample) => sample.spotCoveragePct,
+                    100,
+                    snapshot.simTimeS,
+                    chartWindowDurationS
+                  )}
+                  className="aiming-chart-path-target"
+                />
+                <path
+                  d={buildTimePath(
+                    recentChartHistory,
+                    420,
+                    220,
+                    (sample) => sample.laserOn,
+                    100,
+                    snapshot.simTimeS,
+                    chartWindowDurationS
+                  )}
+                  className="aiming-chart-path-laser"
+                />
+              </svg>
+              <div className="aiming-chart-legend">
+                <span className="legend-target">Coverage</span>
+                <span className="legend-threshold">Laser threshold</span>
+                <span className="legend-laser">Laser on</span>
               </div>
-              <div className="aiming-frame-stack">
-                {visibleFrames.map((frame) => {
-                  const frameLeftPercent =
-                    50 +
-                    (((frame.cycle.actualPointingCentroidMrad - frame.cycle.smearWidthMrad * 0.5) /
-                      viewHalfRangeMrad) *
-                      50);
-                  const frameWidthPercent =
-                    (frame.cycle.smearWidthMrad / Math.max(viewHalfRangeMrad * 2, 1e-6)) * 100;
-                  const frameCentroidPercent =
-                    50 + (frame.cycle.measuredPointingErrorMrad / viewHalfRangeMrad) * 50;
-                  return (
-                    <div key={`${frame.index}-${frame.cycle.exposureStartTimeS}`} className={`aiming-frame-row${frame.isActive ? " active" : ""}`}>
-                      <div className="aiming-frame-label">
-                        <strong>frame {frame.index}</strong>
-                        <span>{frame.status}</span>
-                      </div>
-                      <div className="aiming-frame-strip">
-                        <div
-                          className="aiming-frame-smear"
-                          style={{
-                            left: `${Math.min(96, Math.max(4, frameLeftPercent))}%`,
-                            width: `${Math.min(92, Math.max(2, frameWidthPercent))}%`
-                          }}
-                        />
-                        <div
-                          className="aiming-frame-centroid"
-                          style={{ left: `${Math.min(96, Math.max(4, frameCentroidPercent))}%` }}
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
+            </div>
+
+            <div className="aiming-chart-card">
+              <div className="aiming-chart-title">
+                <span>Target temperature (°C)</span>
+                <strong>{currentSample.targetTemperatureC.toFixed(1)} °C</strong>
+              </div>
+              <svg viewBox="0 0 420 220" className="aiming-chart-svg" aria-label="Target temperature over time">
+                <text x="8" y="24" className="aiming-chart-scale-text">{`${temperatureChartMaxValue.toFixed(0)} °C`}</text>
+                <text x="8" y="212" className="aiming-chart-scale-text">22 °C</text>
+                <line x1="20" y1="20" x2="20" y2="200" className="aiming-chart-axis" />
+                <line x1="20" y1="200" x2="400" y2="200" className="aiming-chart-axis" />
+                <line x1="20" y1={lethalThresholdY} x2="400" y2={lethalThresholdY} className="aiming-chart-threshold" />
+                <path
+                  d={buildTimePath(
+                    recentChartHistory,
+                    420,
+                    220,
+                    (sample) => sample.targetTemperatureC,
+                    temperatureChartMaxValue,
+                    snapshot.simTimeS,
+                    chartWindowDurationS
+                  )}
+                  className="aiming-chart-path-temperature"
+                />
+              </svg>
+              <div className="aiming-chart-legend">
+                <span className="legend-temperature">Temperature</span>
+                <span className="legend-threshold">Kill threshold</span>
+              </div>
+            </div>
+
+            <div className="aiming-chart-card">
+              <div className="aiming-chart-title">
+                <span>Shots per second</span>
+                <strong>{currentSample.shotsPerSecond.toFixed(2)} shots/s</strong>
+              </div>
+              <svg viewBox="0 0 420 220" className="aiming-chart-svg" aria-label="Shots per second over time">
+                <text x="8" y="24" className="aiming-chart-scale-text">{`${shotsChartMaxValue.toFixed(1)} shots/s`}</text>
+                <text x="8" y="212" className="aiming-chart-scale-text">0 shots/s</text>
+                <line x1="20" y1="20" x2="20" y2="200" className="aiming-chart-axis" />
+                <line x1="20" y1="200" x2="400" y2="200" className="aiming-chart-axis" />
+                <path
+                  d={buildTimePath(
+                    recentChartHistory,
+                    420,
+                    220,
+                    (sample) => sample.shotsPerSecond,
+                    shotsChartMaxValue,
+                    snapshot.simTimeS,
+                    chartWindowDurationS
+                  )}
+                  className="aiming-chart-path-shot-rate"
+                />
+              </svg>
+              <div className="aiming-chart-legend">
+                <span className="legend-shot-rate">Recent shot rate</span>
               </div>
             </div>
           </div>
 
-          <div className="aiming-chart-grid">
-            <div className="aiming-chart-card">
-              <div className="aiming-chart-title">Angles vs time</div>
-              <svg viewBox="0 0 480 180" className="aiming-chart-svg" aria-label="Angles vs time">
-                <path d={buildPath(chartSamples, 480, 180, (sample) => sample.opticalTargetAngleMrad, maxChartValue)} className="aiming-chart-path-target" />
-                <path d={buildPath(chartSamples, 480, 180, (sample) => sample.mirrorAngleMrad, maxChartValue)} className="aiming-chart-path-mirror" />
-                <path d={buildPath(chartSamples, 480, 180, (sample) => sample.pointingErrorMrad, maxChartValue)} className="aiming-chart-path-error" />
-              </svg>
-              <div className="aiming-chart-legend">
-                <span className="legend-target">Optical target angle</span>
-                <span className="legend-mirror">Mirror angle</span>
-                <span className="legend-error">Residual error</span>
+          <div className="aiming-viewport-card aiming-sensor-card">
+            <div className="aiming-viewport">
+              <div className="aiming-crosshair aiming-crosshair-horizontal" />
+              <div className="aiming-crosshair aiming-crosshair-vertical" />
+              {renderSensorAxisLabels()}
+              <div className={`aiming-viewport-indicator${playbackStage === "open" ? " active" : ""}`}>
+                <div className={`aiming-viewport-indicator-reel${playbackStage === "open" ? " active" : ""}`} />
               </div>
+              <div className={`aiming-viewport-flash${snapshot.flashActive ? " active" : ""}`} />
+              <div
+                className={`aiming-laser-spot${currentSample.laserOn ? " active" : ""}`}
+                style={{
+                  width: `${laserSpotWidthPercent}%`,
+                  height: `${laserSpotHeightPercent}%`
+                }}
+              />
+              <div className={`aiming-laser-dot${snapshot.shotFlashActive ? " shot" : ""}`} />
+              <div
+                className="aiming-target-dot"
+                style={{
+                  left: `${targetXPercent}%`,
+                  top: `${targetYPercent}%`
+                }}
+              />
             </div>
-
-            <div className="aiming-chart-card">
-              <div className="aiming-chart-title">Disturbance and control effort</div>
-              <svg viewBox="0 0 480 180" className="aiming-chart-svg" aria-label="Disturbance and control effort">
-                <path d={buildPath(chartSamples, 480, 180, (sample) => sample.residualPlatformMotionMrad, maxChartValue)} className="aiming-chart-path-platform" />
-                <path d={buildPath(chartSamples, 480, 180, (sample) => sample.mirrorCommandMrad, maxChartValue)} className="aiming-chart-path-command" />
-                <path d={buildPath(chartSamples, 480, 180, (sample) => sample.measuredErrorMrad, maxChartValue)} className="aiming-chart-path-measurement" />
-              </svg>
-              <div className="aiming-chart-legend">
-                <span className="legend-platform">Residual platform motion</span>
-                <span className="legend-command">Command after delay</span>
-                <span className="legend-measurement">Measured error</span>
-              </div>
+            <div className="aiming-frame-stack">
+              {visibleFrames.map((frame, index) => {
+                const centroidX = sensorXPercent(frame.cycle.measuredPointingErrorMrad, viewHalfRangeMrad);
+                const centroidY = sensorYPercent(frame.cycle.measuredPointingErrorYMrad, viewHalfRangeMrad);
+                return (
+                  <div
+                    key={frame.id}
+                    className={`aiming-frame-row${index === 0 ? " active" : ""}${frame.isIncoming ? " incoming" : ""}`}
+                  >
+                    <div className="aiming-frame-strip">
+                      <div className="aiming-crosshair aiming-crosshair-horizontal" />
+                      <div className="aiming-crosshair aiming-crosshair-vertical" />
+                      {renderSensorAxisLabels()}
+                      <svg viewBox="0 0 100 100" className="aiming-frame-svg" aria-hidden="true">
+                        <path
+                          d={buildFramePath(frame.cycle.exposurePathPoints, viewHalfRangeMrad, 100, 100)}
+                          className="aiming-frame-path"
+                        />
+                        {frame.showCentroid ? (
+                          <circle
+                            cx={centroidX}
+                            cy={centroidY}
+                            r="1.6"
+                            className="aiming-frame-centroid-dot"
+                          />
+                        ) : null}
+                      </svg>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>
@@ -476,48 +605,441 @@ export function AimingLabPanel({
         <div className="aiming-controls">
           <div className="aiming-control-group">
             <div className="aiming-control-group-label">Upstream stabilization</div>
-            <AimingSlider label="Gimbal suppression" value={params.gimbalSuppressionPct} min={0} max={99} step={1} suffix="%" onChange={(value) => onChange({ gimbalSuppressionPct: value })} />
-            <AimingSlider label="Pad damping" value={params.dampingSuppressionPct} min={0} max={99} step={1} suffix="%" onChange={(value) => onChange({ dampingSuppressionPct: value })} />
+            <AimingSlider
+              label="Gimbal suppression"
+              value={params.gimbalSuppressionPct}
+              min={0}
+              max={99}
+              step={1}
+              suffix="%"
+              onChange={(value) => onChange({ gimbalSuppressionPct: value })}
+            />
+            <AimingSlider
+              label="Pad damping"
+              value={params.dampingSuppressionPct}
+              min={0}
+              max={99}
+              step={1}
+              suffix="%"
+              onChange={(value) => onChange({ dampingSuppressionPct: value })}
+            />
           </div>
 
           <div className="aiming-control-group">
             <div className="aiming-control-group-label">Camera and latency</div>
-            <AimingSlider label="Camera frame rate" value={params.cameraFps} min={60} max={1000} step={10} suffix=" fps" onChange={(value) => onChange({ cameraFps: value })} />
-            <AimingSlider label="Exposure time" value={params.exposureTimeMs} min={0.1} max={8} step={0.05} suffix=" ms" onChange={(value) => onChange({ exposureTimeMs: value })} />
-            <AimingSlider label="Camera field of view" value={params.cameraFovMrad} min={0.8} max={8} step={0.1} suffix=" mrad" onChange={(value) => onChange({ cameraFovMrad: value })} />
-            <AimingSlider label="Processing latency" value={params.processingLatencyMs} min={0.2} max={12} step={0.1} suffix=" ms" onChange={(value) => onChange({ processingLatencyMs: value })} />
-            <AimingSlider label="Driver latency" value={params.driverLatencyMs} min={0.05} max={3} step={0.05} suffix=" ms" onChange={(value) => onChange({ driverLatencyMs: value })} />
-            <AimingSlider label="Image noise" value={params.pixelNoisePx} min={0} max={2} step={0.05} suffix=" px" onChange={(value) => onChange({ pixelNoisePx: value })} />
+            <AimingSlider
+              label="Camera frame rate"
+              value={params.cameraFps}
+              min={60}
+              max={1000}
+              step={10}
+              suffix=" fps"
+              onChange={(value) => onChange({ cameraFps: value })}
+            />
+            <AimingSlider
+              label="Exposure time"
+              value={params.exposureTimeMs}
+              min={0.1}
+              max={8}
+              step={0.05}
+              suffix=" ms"
+              onChange={(value) => onChange({ exposureTimeMs: value })}
+            />
+            <AimingSlider
+              label="Camera field of view"
+              value={params.cameraFovMrad}
+              min={0.8}
+              max={8}
+              step={0.1}
+              suffix=" mrad"
+              onChange={(value) => onChange({ cameraFovMrad: value })}
+            />
+            <AimingSlider
+              label="Processing latency"
+              value={params.processingLatencyMs}
+              min={0.2}
+              max={12}
+              step={0.1}
+              suffix=" ms"
+              onChange={(value) => onChange({ processingLatencyMs: value })}
+            />
+            <AimingSlider
+              label="Driver latency"
+              value={params.driverLatencyMs}
+              min={0.05}
+              max={3}
+              step={0.05}
+              suffix=" ms"
+              onChange={(value) => onChange({ driverLatencyMs: value })}
+            />
+            <AimingSlider
+              label="Image noise"
+              value={params.pixelNoisePx}
+              min={0}
+              max={2}
+              step={0.05}
+              suffix=" px"
+              onChange={(value) => onChange({ pixelNoisePx: value })}
+            />
           </div>
 
           <div className="aiming-control-group">
-            <div className="aiming-control-group-label">MEMS mirror and PID</div>
-            <AimingSlider label="Mirror natural frequency" value={params.memsNaturalFrequencyHz} min={120} max={2500} step={10} suffix=" Hz" onChange={(value) => onChange({ memsNaturalFrequencyHz: value })} />
-            <AimingSlider label="Mirror damping ratio" value={params.memsDampingRatio} min={0.1} max={1.2} step={0.01} onChange={(value) => onChange({ memsDampingRatio: value })} />
-            <AimingSlider label="Mirror max angle" value={params.memsMaxAngleMrad} min={0.4} max={6} step={0.05} suffix=" mrad" onChange={(value) => onChange({ memsMaxAngleMrad: value })} />
-            <AimingSlider label="Mirror visual exaggeration" value={mirrorVisualExaggeration} min={20} max={1000} step={10} suffix="x" onChange={setMirrorVisualExaggeration} />
-            <AimingSlider label="PID Kp" value={params.pidKp} min={0} max={8} step={0.05} onChange={(value) => onChange({ pidKp: value })} />
-            <AimingSlider label="PID Ki" value={params.pidKi} min={0} max={220} step={1} onChange={(value) => onChange({ pidKi: value })} />
-            <AimingSlider label="PID Kd" value={params.pidKd} min={0} max={0.03} step={0.0005} onChange={(value) => onChange({ pidKd: value })} />
+            <div className="aiming-control-group-label">Smart MEMS command generator</div>
+            <label className="aiming-control">
+              <span>Generator type</span>
+              <strong>{selectedCommandGenerator.label}</strong>
+              <select
+                value={params.commandGeneratorMode}
+                onChange={(event) =>
+                  onChange({ commandGeneratorMode: event.target.value as AimingCommandGeneratorMode })
+                }
+              >
+                {COMMAND_GENERATOR_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              <small>{selectedCommandGenerator.detail}</small>
+            </label>
+            <AimingSlider
+              label="PI / PID Kp"
+              value={params.pidKp}
+              min={0}
+              max={8}
+              step={0.05}
+              onChange={(value) => onChange({ pidKp: value })}
+            />
+            <AimingSlider
+              label="Integral drift hold"
+              value={params.pidKi}
+              min={0}
+              max={220}
+              step={1}
+              onChange={(value) => onChange({ pidKi: value })}
+            />
+            <AimingSlider
+              label="Derivative damping"
+              value={params.pidKd}
+              min={0}
+              max={0.03}
+              step={0.0005}
+              onChange={(value) => onChange({ pidKd: value })}
+            />
+            <AimingSlider
+              label="Integral clamp"
+              value={params.integralLimitMrad}
+              min={0.1}
+              max={4}
+              step={0.05}
+              suffix=" mrad"
+              onChange={(value) => onChange({ integralLimitMrad: value })}
+            />
+            {params.commandGeneratorMode === "integral" ||
+            params.commandGeneratorMode === "frequency_phase" ||
+            params.commandGeneratorMode === "dmd_sliding_window" ? (
+              <AimingSlider
+                label="Predictor lead"
+                value={params.predictorLeadMs}
+                min={0}
+                max={12}
+                step={0.1}
+                suffix=" ms"
+                onChange={(value) => onChange({ predictorLeadMs: value })}
+              />
+            ) : null}
+            {params.commandGeneratorMode === "integral" ? (
+              <AimingSlider
+                label="Centroid velocity gain"
+                value={params.centroidVelocityGain}
+                min={0}
+                max={2}
+                step={0.02}
+                onChange={(value) => onChange({ centroidVelocityGain: value })}
+              />
+            ) : null}
+            {params.commandGeneratorMode === "frequency_phase" ? (
+              <AimingSlider
+                label="Base oscillation"
+                value={params.phasePredictorBaseFrequencyHz}
+                min={0.5}
+                max={30}
+                step={0.1}
+                suffix=" Hz"
+                onChange={(value) => onChange({ phasePredictorBaseFrequencyHz: value })}
+              />
+            ) : null}
+            {params.commandGeneratorMode === "dmd_sliding_window" ? (
+              <>
+                <AimingSlider
+                  label="DMD window"
+                  value={params.dmdWindowSize}
+                  min={3}
+                  max={20}
+                  step={1}
+                  suffix=" frames"
+                  onChange={(value) => onChange({ dmdWindowSize: value })}
+                />
+                <AimingSlider
+                  label="DMD command period"
+                  value={params.dmdCommandPeriodMs}
+                  min={0.25}
+                  max={5}
+                  step={0.05}
+                  suffix=" ms"
+                  onChange={(value) => onChange({ dmdCommandPeriodMs: value })}
+                />
+              </>
+            ) : null}
+            {params.commandGeneratorMode === "integral" ||
+            params.commandGeneratorMode === "frequency_phase" ||
+            params.commandGeneratorMode === "dmd_sliding_window" ? (
+              <>
+                <AimingSlider
+                  label="IMU feed-forward"
+                  value={params.imuFeedforwardGain}
+                  min={0}
+                  max={2}
+                  step={0.02}
+                  onChange={(value) => onChange({ imuFeedforwardGain: value })}
+                />
+                <AimingSlider
+                  label="IMU low-pass cutoff"
+                  value={params.imuLowPassHz}
+                  min={1}
+                  max={120}
+                  step={1}
+                  suffix=" Hz"
+                  onChange={(value) => onChange({ imuLowPassHz: value })}
+                />
+                <AimingSlider
+                  label="IMU rate lead"
+                  value={params.imuRateLeadGain}
+                  min={0}
+                  max={2}
+                  step={0.02}
+                  onChange={(value) => onChange({ imuRateLeadGain: value })}
+                />
+              </>
+            ) : null}
+          </div>
+
+          <div className="aiming-control-group">
+            <div className="aiming-control-group-label">MEMS mirror plant</div>
+            <AimingSlider
+              label="Mirror natural frequency"
+              value={params.memsNaturalFrequencyHz}
+              min={120}
+              max={2500}
+              step={10}
+              suffix=" Hz"
+              onChange={(value) => onChange({ memsNaturalFrequencyHz: value })}
+            />
+            <AimingSlider
+              label="Mirror damping ratio"
+              value={params.memsDampingRatio}
+              min={0.1}
+              max={1.2}
+              step={0.01}
+              onChange={(value) => onChange({ memsDampingRatio: value })}
+            />
+            <AimingSlider
+              label="Mirror max angle"
+              value={params.memsMaxAngleMrad}
+              min={0.4}
+              max={6}
+              step={0.05}
+              suffix=" mrad"
+              onChange={(value) => onChange({ memsMaxAngleMrad: value })}
+            />
+          </div>
+
+          <div className="aiming-control-group">
+            <div className="aiming-control-group-label">Laser and thermal model</div>
+            <AimingSlider
+              label="Laser power"
+              value={params.laserPowerW}
+              min={0.5}
+              max={25}
+              step={0.1}
+              suffix=" W"
+              onChange={(value) => onChange({ laserPowerW: value })}
+            />
+            <AimingSlider
+              label="Laser spot diameter"
+              value={params.laserSpotDiameterMm}
+              min={0.05}
+              max={1.5}
+              step={0.01}
+              suffix=" mm"
+              onChange={(value) => onChange({ laserSpotDiameterMm: value })}
+            />
+            <AimingSlider
+              label="Laser on threshold"
+              value={params.laserEngageCoveragePct}
+              min={5}
+              max={95}
+              step={1}
+              suffix="%"
+              onChange={(value) => onChange({ laserEngageCoveragePct: value })}
+            />
+            <AimingSlider
+              label="Target mass"
+              value={params.targetMassMg}
+              min={1}
+              max={80}
+              step={0.5}
+              suffix=" mg"
+              onChange={(value) => onChange({ targetMassMg: value })}
+            />
+            <AimingSlider
+              label="Target specific heat"
+              value={params.targetSpecificHeatJPerKgC}
+              min={800}
+              max={5000}
+              step={50}
+              suffix=" J/kg/C"
+              onChange={(value) => onChange({ targetSpecificHeatJPerKgC: value })}
+            />
+            <AimingSlider
+              label="Heat loss rate"
+              value={params.targetHeatLossWPerC}
+              min={0.005}
+              max={0.3}
+              step={0.005}
+              suffix=" W/C"
+              onChange={(value) => onChange({ targetHeatLossWPerC: value })}
+            />
+            <AimingSlider
+              label="Lethal temperature"
+              value={params.targetLethalTemperatureC}
+              min={28}
+              max={120}
+              step={1}
+              suffix=" C"
+              onChange={(value) => onChange({ targetLethalTemperatureC: value })}
+            />
+            <AimingSlider
+              label="Laser absorption"
+              value={params.targetAbsorptivityPct}
+              min={1}
+              max={100}
+              step={1}
+              suffix="%"
+              onChange={(value) => onChange({ targetAbsorptivityPct: value })}
+            />
           </div>
 
           <div className="aiming-control-group">
             <div className="aiming-control-group-label">Target and disturbance</div>
-            <AimingSlider label="Low-frequency drift" value={params.lowFrequencyDisturbanceMrad} min={0} max={2} step={0.02} suffix=" mrad" onChange={(value) => onChange({ lowFrequencyDisturbanceMrad: value })} />
-            <AimingSlider label="Low-frequency Hz" value={params.lowFrequencyHz} min={0.5} max={20} step={0.5} suffix=" Hz" onChange={(value) => onChange({ lowFrequencyHz: value })} />
-            <AimingSlider label="High-frequency vibration" value={params.highFrequencyDisturbanceMrad} min={0} max={1} step={0.01} suffix=" mrad" onChange={(value) => onChange({ highFrequencyDisturbanceMrad: value })} />
-            <AimingSlider label="High-frequency Hz" value={params.highFrequencyHz} min={20} max={300} step={5} suffix=" Hz" onChange={(value) => onChange({ highFrequencyHz: value })} />
-            <AimingSlider label="Target step" value={params.targetStepMrad} min={0.1} max={2} step={0.02} suffix=" mrad" onChange={(value) => onChange({ targetStepMrad: value })} />
-            <AimingSlider label="Target sway" value={params.targetSwayMrad} min={0} max={0.5} step={0.01} suffix=" mrad" onChange={(value) => onChange({ targetSwayMrad: value })} />
-            <AimingSlider label="Lock threshold" value={params.lockThresholdMrad} min={0.02} max={0.3} step={0.005} suffix=" mrad" onChange={(value) => onChange({ lockThresholdMrad: value })} />
+            <AimingSlider
+              label="Low-frequency drift"
+              value={params.lowFrequencyDisturbanceMrad}
+              min={0}
+              max={2}
+              step={0.02}
+              suffix=" mrad"
+              onChange={(value) => onChange({ lowFrequencyDisturbanceMrad: value })}
+            />
+            <AimingSlider
+              label="Low-frequency Hz"
+              value={params.lowFrequencyHz}
+              min={0.5}
+              max={20}
+              step={0.5}
+              suffix=" Hz"
+              onChange={(value) => onChange({ lowFrequencyHz: value })}
+            />
+            <AimingSlider
+              label="High-frequency vibration"
+              value={params.highFrequencyDisturbanceMrad}
+              min={0}
+              max={1}
+              step={0.01}
+              suffix=" mrad"
+              onChange={(value) => onChange({ highFrequencyDisturbanceMrad: value })}
+            />
+            <AimingSlider
+              label="High-frequency Hz"
+              value={params.highFrequencyHz}
+              min={20}
+              max={300}
+              step={5}
+              suffix=" Hz"
+              onChange={(value) => onChange({ highFrequencyHz: value })}
+            />
+            <AimingSlider
+              label="Target step"
+              value={params.targetStepMrad}
+              min={0.1}
+              max={2}
+              step={0.02}
+              suffix=" mrad"
+              onChange={(value) => onChange({ targetStepMrad: value })}
+            />
+            <AimingSlider
+              label="Target sway"
+              value={params.targetSwayMrad}
+              min={0}
+              max={0.5}
+              step={0.01}
+              suffix=" mrad"
+              onChange={(value) => onChange({ targetSwayMrad: value })}
+            />
+            <AimingSlider
+              label="Target X nudge"
+              value={params.targetBiasXMrad}
+              min={-1}
+              max={1}
+              step={0.02}
+              suffix=" mrad"
+              onChange={(value) => onChange({ targetBiasXMrad: value })}
+            />
+            <AimingSlider
+              label="Target Y nudge"
+              value={params.targetBiasYMrad}
+              min={-1}
+              max={1}
+              step={0.02}
+              suffix=" mrad"
+              onChange={(value) => onChange({ targetBiasYMrad: value })}
+            />
+            <AimingSlider
+              label="Mirror pitch nudge"
+              value={params.mirrorPitchBiasMrad}
+              min={-1}
+              max={1}
+              step={0.02}
+              suffix=" mrad"
+              onChange={(value) => onChange({ mirrorPitchBiasMrad: value })}
+            />
+            <AimingSlider
+              label="Mirror roll nudge"
+              value={params.mirrorRollBiasMrad}
+              min={-1}
+              max={1}
+              step={0.02}
+              suffix=" mrad"
+              onChange={(value) => onChange({ mirrorRollBiasMrad: value })}
+            />
+            <AimingSlider
+              label="Lock threshold"
+              value={params.lockThresholdMrad}
+              min={0.02}
+              max={0.3}
+              step={0.005}
+              suffix=" mrad"
+              onChange={(value) => onChange({ lockThresholdMrad: value })}
+            />
           </div>
 
           <div className="aiming-note-block">
             <strong>Interpretation</strong>
             <p>
-              Start with gimbal and damping at zero to isolate the camera + MEMS loop. Then turn them back on
-              to see how much easier the fine steering problem becomes. Higher latency and lower mirror bandwidth
-              reduce lock fraction first.
+              `Direct` fires one command per centroid. `PI hold` keeps correcting from the last centroid. `Integral`
+              adds between-frame extrapolation from centroid drift and IMU. `Frequency + phase` assumes periodic
+              motion. `DMD sliding window` fits a local linear model over recent centroids and refreshes commands on
+              its own millisecond cadence.
             </p>
           </div>
         </div>

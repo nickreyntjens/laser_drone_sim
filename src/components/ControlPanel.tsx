@@ -10,6 +10,7 @@ interface ControlPanelProps {
   seed: number;
   onApply: () => void;
   onEditSafetyZone: () => void;
+  onOpenScenarioManager: () => void;
   onRandomize: () => void;
   onRestart: () => void;
   onToggleRun: () => void;
@@ -138,6 +139,7 @@ export function ControlPanel({
   seed,
   onApply,
   onEditSafetyZone,
+  onOpenScenarioManager,
   onRandomize,
   onRestart,
   onToggleRun,
@@ -166,6 +168,9 @@ export function ControlPanel({
         </button>
         <button className="secondary-button" onClick={onRandomize}>
           {draftFieldProfile.randomizeActionLabel}
+        </button>
+        <button className="secondary-button" onClick={onOpenScenarioManager}>
+          Scenario manager
         </button>
         <button className="secondary-button" onClick={onEditSafetyZone}>
           Edit nominal safety zone

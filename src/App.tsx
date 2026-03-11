@@ -9,6 +9,7 @@ import { GuideAvatar } from "./components/GuideAvatar";
 import { GuideSetupPanel } from "./components/GuideSetupPanel";
 import { LiveMetrics } from "./components/LiveMetrics";
 import { MethodologyPanel } from "./components/MethodologyPanel";
+import { ScenarioManagerPanel } from "./components/ScenarioManagerPanel";
 import {
   deriveSafetyZoneEditorView,
   SafetyZoneEditorDraft,
@@ -21,6 +22,19 @@ import { useMissionAudio } from "./hooks/useMissionAudio";
 import { useMissionController } from "./hooks/useMissionController";
 import { useMissionGuide } from "./hooks/useMissionGuide";
 import { useResponsiveUi } from "./hooks/useResponsiveUi";
+import {
+  applyScenarioToState,
+  buildScenarioFromState,
+  createPersistentAppState,
+  parseScenarioImport,
+  PERSISTENT_APP_STATE_STORAGE_KEY,
+  readPersistentAppState,
+  readSavedScenarios,
+  SAVED_SCENARIOS_STORAGE_KEY,
+  SavedScenario,
+  ScenarioSectionId,
+  serializeScenarioExport
+} from "./lib/scenarios";
 import { formatDuration } from "./lib/format";
 import { fieldReferenceImageFor } from "./content/fieldReferenceImages";
 import { buildBeamDiagramIntroLines } from "./content/guideScript";
@@ -38,6 +52,7 @@ import { FieldType, MissionLogEvent, SimulationParameters } from "./sim/types";
 type CameraMode = "follow" | "followSide" | "overview" | "dock" | "manual";
 type OverlayScreen =
   | "setup"
+  | "scenarios"
   | "telemetry"
   | "report"
   | "notes"
@@ -59,6 +74,20 @@ interface FarmerSafetyToast {
   message: string;
   blockingDistanceM: number | null;
   nominalSafetyZoneRadiusM: number | null;
+}
+
+function downloadJsonFile(filename: string, contents: string): void {
+  if (typeof window === "undefined" || typeof document === "undefined") {
+    return;
+  }
+
+  const blob = new Blob([contents], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }
 
 function notifyParentViewportMode(type: "make-big" | "shrink"): void {
@@ -162,9 +191,49 @@ export default function App(): JSX.Element {
     }),
     [runtimeConfig]
   );
-  const [activeParams, setActiveParams] = useState<SimulationParameters>(initialParams);
-  const [draftParams, setDraftParams] = useState<SimulationParameters>(initialParams);
-  const [seed, setSeed] = useState(DEFAULT_SEED);
+  const initialAimingParams = useMemo(() => createDefaultAimingLabParameters(), []);
+  const persistedState = useMemo(
+    () =>
+      readPersistentAppState(
+        typeof window !== "undefined"
+          ? window.localStorage.getItem(PERSISTENT_APP_STATE_STORAGE_KEY)
+          : null,
+        {
+          simulation: initialParams,
+          aiming: initialAimingParams,
+          seed: DEFAULT_SEED,
+          playbackSpeed: PLAYBACK_SPEED
+        }
+      ),
+    [initialAimingParams, initialParams]
+  );
+  const hydratedActiveParams = useMemo<SimulationParameters>(
+    () => ({
+      ...persistedState.activeParams,
+      showOnlySelectedTargetMarkers:
+        runtimeConfig.markerModeOverride === "all"
+          ? false
+          : runtimeConfig.markerModeOverride === "selected"
+            ? true
+            : persistedState.activeParams.showOnlySelectedTargetMarkers
+    }),
+    [persistedState.activeParams, runtimeConfig.markerModeOverride]
+  );
+  const hydratedDraftParams = useMemo<SimulationParameters>(
+    () => ({
+      ...persistedState.draftParams,
+      showOnlySelectedTargetMarkers:
+        runtimeConfig.markerModeOverride === "all"
+          ? false
+          : runtimeConfig.markerModeOverride === "selected"
+            ? true
+            : persistedState.draftParams.showOnlySelectedTargetMarkers
+    }),
+    [persistedState.draftParams, runtimeConfig.markerModeOverride]
+  );
+  const [activeParams, setActiveParams] = useState<SimulationParameters>(hydratedActiveParams);
+  const [draftParams, setDraftParams] = useState<SimulationParameters>(hydratedDraftParams);
+  const [seed, setSeed] = useState(persistedState.seed);
   const [scenarioVersion, setScenarioVersion] = useState(0);
   const [cameraMode, setCameraMode] = useState<CameraMode>(runtimeConfig.initialCameraMode);
   const [activeOverlay, setActiveOverlay] = useState<OverlayScreen>(
@@ -174,7 +243,7 @@ export default function App(): JSX.Element {
     !isEmbedded || runtimeConfig.startExpanded || runtimeConfig.startSafetyEditor
   );
   const [controlsHidden, setControlsHidden] = useState(false);
-  const [playbackSpeed, setPlaybackSpeed] = useState<number>(PLAYBACK_SPEED);
+  const [playbackSpeed, setPlaybackSpeed] = useState<number>(persistedState.playbackSpeed);
   const [showBuildToast, setShowBuildToast] = useState(false);
   const [showMissionCompleteToast, setShowMissionCompleteToast] = useState(false);
   const [farmerSafetyToast, setFarmerSafetyToast] = useState<FarmerSafetyToast | null>(null);
@@ -182,19 +251,59 @@ export default function App(): JSX.Element {
   const [pendingFieldReferenceFieldType, setPendingFieldReferenceFieldType] = useState<FieldType | null>(null);
   const [suppressFarmerSafetyToast, setSuppressFarmerSafetyToast] = useState(false);
   const [safetyEditorDraft, setSafetyEditorDraft] = useState<SafetyZoneEditorDraft | null>(
-    runtimeConfig.startSafetyEditor ? createSafetyEditorDraft(initialParams) : null
+    runtimeConfig.startSafetyEditor ? createSafetyEditorDraft(persistedState.activeParams) : null
   );
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
-  const [aimingLabParams, setAimingLabParams] = useState(createDefaultAimingLabParameters);
+  const [aimingLabParams, setAimingLabParams] = useState(persistedState.aimingLabParams);
+  const [aimingLabResetVersion, setAimingLabResetVersion] = useState(0);
+  const [savedScenarios, setSavedScenarios] = useState<SavedScenario[]>(
+    () =>
+      readSavedScenarios(
+        typeof window !== "undefined"
+          ? window.localStorage.getItem(SAVED_SCENARIOS_STORAGE_KEY)
+          : null
+      )
+  );
   const watchSecondsRef = useRef(0);
   const buildToastTriggeredRef = useRef(false);
   const fieldReferenceShownForRef = useRef<FieldType | null>(null);
   const fieldReferenceTimerRef = useRef<number | null>(null);
   const previousSummaryRef = useRef(false);
   const safetyEditorResumeRef = useRef(false);
+  const aimingLabResumeRef = useRef<boolean | null>(null);
   const suppressFarmerSafetyToastRef = useRef(false);
   const { isMobileUi } = useResponsiveUi();
   const isStandalonePage = typeof window !== "undefined" && window.parent === window;
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.localStorage.setItem(
+      PERSISTENT_APP_STATE_STORAGE_KEY,
+      JSON.stringify(
+        createPersistentAppState({
+          activeParams,
+          draftParams,
+          aimingLabParams,
+          seed,
+          playbackSpeed
+        })
+      )
+    );
+  }, [activeParams, aimingLabParams, draftParams, playbackSpeed, seed]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.localStorage.setItem(
+      SAVED_SCENARIOS_STORAGE_KEY,
+      JSON.stringify(savedScenarios)
+    );
+  }, [savedScenarios]);
 
   useEffect(() => {
     suppressFarmerSafetyToastRef.current = suppressFarmerSafetyToast;
@@ -249,6 +358,25 @@ export default function App(): JSX.Element {
     () => parametersDiffer(activeParams, draftParams),
     [activeParams, draftParams]
   );
+  useEffect(() => {
+    if (activeOverlay === "aiming") {
+      if (aimingLabResumeRef.current === null) {
+        aimingLabResumeRef.current = isRunning;
+      }
+      if (isRunning) {
+        setIsRunning(false);
+      }
+      return;
+    }
+
+    if (aimingLabResumeRef.current !== null) {
+      const resumeMission = aimingLabResumeRef.current;
+      aimingLabResumeRef.current = null;
+      if (resumeMission) {
+        setIsRunning(true);
+      }
+    }
+  }, [activeOverlay, isRunning, setIsRunning]);
   const safetyEditorActive = activeOverlay === "safetyZone" && safetyEditorDraft !== null;
   const {
     guideEnabled,
@@ -326,6 +454,93 @@ export default function App(): JSX.Element {
     setDraftParams(nextParams);
     setFarmerSafetyToast(null);
     setScenarioVersion((value) => value + 1);
+  };
+
+  const createScenario = useCallback(
+    (name: string, sections: ScenarioSectionId[], existing?: SavedScenario): SavedScenario => {
+      return buildScenarioFromState({
+        name,
+        sections,
+        activeParams,
+        aimingParams: aimingLabParams,
+        seed,
+        existingId: existing?.id,
+        createdAt: existing?.createdAt
+      });
+    },
+    [activeParams, aimingLabParams, seed]
+  );
+
+  const saveScenario = (name: string, sections: ScenarioSectionId[]): void => {
+    const scenario = createScenario(name, sections);
+    setSavedScenarios((current) => [scenario, ...current.filter((item) => item.id !== scenario.id)]);
+  };
+
+  const loadScenario = (scenarioId: string): void => {
+    const scenario = savedScenarios.find((item) => item.id === scenarioId);
+    if (!scenario) {
+      return;
+    }
+
+    const applied = applyScenarioToState({
+      scenario,
+      simulationParams: activeParams,
+      aimingParams: aimingLabParams
+    });
+
+    if (applied.updatesSimulation) {
+      setActiveParams(applied.nextSimulationParams);
+      setDraftParams(applied.nextSimulationParams);
+      if (typeof applied.nextSeed === "number") {
+        setSeed(applied.nextSeed);
+      }
+      setScenarioVersion((value) => value + 1);
+    }
+
+    if (applied.updatesAiming) {
+      setAimingLabParams(applied.nextAimingParams);
+      setAimingLabResetVersion((value) => value + 1);
+    }
+  };
+
+  const exportScenario = (scenarioId: string): void => {
+    const scenario = savedScenarios.find((item) => item.id === scenarioId);
+    if (!scenario) {
+      return;
+    }
+
+    downloadJsonFile(
+      `${scenario.name.replace(/\s+/g, "-").toLowerCase() || "scenario"}.json`,
+      serializeScenarioExport(scenario)
+    );
+  };
+
+  const exportCurrentScenarioSelection = (name: string, sections: ScenarioSectionId[]): void => {
+    const scenario = createScenario(name, sections);
+    downloadJsonFile(
+      `${scenario.name.replace(/\s+/g, "-").toLowerCase() || "scenario"}.json`,
+      serializeScenarioExport(scenario)
+    );
+  };
+
+  const importScenario = (raw: string): { ok: boolean; message: string } => {
+    try {
+      const imported = parseScenarioImport(raw);
+      setSavedScenarios((current) => [imported, ...current]);
+      return {
+        ok: true,
+        message: `Imported "${imported.name}".`
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        message: error instanceof Error ? error.message : "Could not import the scenario."
+      };
+    }
+  };
+
+  const deleteScenario = (scenarioId: string): void => {
+    setSavedScenarios((current) => current.filter((scenario) => scenario.id !== scenarioId));
   };
 
   const closeSafetyZoneEditor = (resumeMission = safetyEditorResumeRef.current): void => {
@@ -411,10 +626,21 @@ export default function App(): JSX.Element {
         seed={seed}
         onApply={applyDraft}
         onEditSafetyZone={() => openSafetyZoneEditor()}
+        onOpenScenarioManager={() => openOverlay("scenarios")}
         onRandomize={randomizeScenario}
         onRestart={restartMission}
         onToggleRun={() => setIsRunning(!isRunning)}
         onParamChange={updateParam}
+      />
+    ) : activeOverlay === "scenarios" ? (
+      <ScenarioManagerPanel
+        scenarios={savedScenarios}
+        onSaveScenario={saveScenario}
+        onLoadScenario={loadScenario}
+        onDeleteScenario={deleteScenario}
+        onExportScenario={exportScenario}
+        onExportCurrent={exportCurrentScenarioSelection}
+        onImportScenario={importScenario}
       />
     ) : activeOverlay === "telemetry" ? (
       <LiveMetrics snapshot={snapshot} isIntroActive={isIntroActive} />
@@ -436,7 +662,11 @@ export default function App(): JSX.Element {
             ...patch
           }))
         }
-        onReset={() => setAimingLabParams(createDefaultAimingLabParameters())}
+        onReset={() => {
+          setAimingLabParams(createDefaultAimingLabParameters());
+          setAimingLabResetVersion((current) => current + 1);
+        }}
+        resetVersion={aimingLabResetVersion}
       />
     ) : activeOverlay === "buildPrompt" ? (
       <BuildPromptPanel />
@@ -834,6 +1064,15 @@ export default function App(): JSX.Element {
                           }}
                         >
                           Setup
+                        </button>
+                        <button
+                          className={activeOverlay === "scenarios" ? "camera-button active" : "camera-button"}
+                          onClick={() => {
+                            toggleOverlay("scenarios");
+                            setActionMenuOpen(false);
+                          }}
+                        >
+                          Scenarios
                         </button>
                         <button
                           className={activeOverlay === "telemetry" ? "camera-button active" : "camera-button"}

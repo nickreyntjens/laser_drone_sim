@@ -2050,6 +2050,69 @@ code {
   font-size: 0.92rem;
 }
 
+.scenario-name-input {
+  width: 100%;
+  border: 1px solid rgba(126, 191, 160, 0.18);
+  border-radius: 14px;
+  background: rgba(9, 15, 13, 0.8);
+  color: var(--text);
+  font: inherit;
+  padding: 12px 14px;
+}
+
+.scenario-section-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin: 16px 0 10px;
+}
+
+.scenario-section-toggle {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  gap: 10px;
+  align-items: start;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(8, 15, 13, 0.46);
+  border: 1px solid rgba(119, 182, 152, 0.08);
+}
+
+.scenario-section-toggle strong,
+.scenario-card strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.scenario-section-toggle small,
+.scenario-card small {
+  color: var(--muted);
+}
+
+.scenario-list {
+  display: grid;
+  gap: 12px;
+}
+
+.scenario-card {
+  padding: 16px;
+  border-radius: 18px;
+  background: rgba(8, 15, 13, 0.46);
+  border: 1px solid rgba(119, 182, 152, 0.08);
+}
+
+.scenario-card-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 10px;
+}
+
+.scenario-hidden-input {
+  display: none;
+}
+
 @keyframes guide-mouth-pulse {
   from {
     transform: translateX(-50%) scaleY(0.8);
@@ -2242,9 +2305,15 @@ code {
   gap: 14px;
 }
 
-.aiming-live-grid {
+.aiming-controls {
+  position: sticky;
+  top: 16px;
+  align-self: start;
+}
+
+.aiming-top-charts {
   display: grid;
-  grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
 }
 
@@ -2268,6 +2337,34 @@ code {
   font-size: 0.92rem;
 }
 
+.aiming-chart-card-command {
+  position: relative;
+}
+
+.aiming-command-feed {
+  position: absolute;
+  right: -10px;
+  top: 50%;
+  width: 18px;
+  height: 6px;
+  border-radius: 999px;
+  transform: translateY(-50%);
+  background: rgba(125, 226, 188, 0.14);
+  box-shadow: 0 0 0 1px rgba(125, 226, 188, 0.12);
+  transition: background 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+}
+
+.aiming-command-feed.active {
+  background: rgba(125, 226, 188, 0.92);
+  box-shadow: 0 0 16px rgba(125, 226, 188, 0.6);
+  transform: translateY(-50%) scaleX(1.15);
+}
+
+.aiming-sensor-card {
+  margin-top: 2px;
+  width: 50%;
+}
+
 .aiming-viewport {
   position: relative;
   aspect-ratio: 16 / 9;
@@ -2277,6 +2374,81 @@ code {
     radial-gradient(circle at center, rgba(93, 164, 136, 0.1), rgba(3, 8, 8, 0.92) 70%),
     linear-gradient(180deg, rgba(4, 9, 9, 0.96), rgba(1, 5, 5, 0.98));
   border: 1px solid rgba(126, 191, 160, 0.12);
+}
+
+.aiming-axis-label {
+  position: absolute;
+  z-index: 2;
+  color: rgba(214, 232, 224, 0.58);
+  font-size: 0.66rem;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+}
+
+.aiming-axis-label-top {
+  top: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.aiming-axis-label-bottom {
+  bottom: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.aiming-axis-label-left {
+  top: 50%;
+  left: 8px;
+  transform: translateY(-50%);
+}
+
+.aiming-axis-label-right {
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+}
+
+.aiming-viewport-indicator {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1px solid rgba(214, 232, 224, 0.2);
+  background: rgba(3, 8, 8, 0.78);
+  opacity: 0.28;
+}
+
+.aiming-viewport-indicator.active {
+  opacity: 0.92;
+}
+
+.aiming-viewport-indicator-reel {
+  position: absolute;
+  inset: 4px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 211, 107, 0.84);
+  border-right-color: transparent;
+  animation: aiming-reel-spin 0.8s linear infinite;
+  animation-play-state: paused;
+}
+
+.aiming-viewport-indicator-reel.active {
+  animation-play-state: running;
+}
+
+.aiming-viewport-flash {
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.4);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.aiming-viewport-flash.active {
+  animation: aiming-sensor-flash 260ms ease-out;
 }
 
 .aiming-sideview-shell {
@@ -2400,7 +2572,6 @@ code {
 .aiming-target-dot,
 .aiming-measurement-dot {
   position: absolute;
-  top: 50%;
   width: 14px;
   height: 14px;
   border-radius: 50%;
@@ -2410,6 +2581,43 @@ code {
 .aiming-target-dot {
   background: #ffd36b;
   box-shadow: 0 0 0 6px rgba(255, 211, 107, 0.12);
+  z-index: 4;
+}
+
+.aiming-laser-dot {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(255, 86, 86, 0.95);
+  box-shadow: 0 0 8px rgba(255, 86, 86, 0.55);
+  z-index: 2;
+}
+
+.aiming-laser-dot.shot {
+  box-shadow: 0 0 18px rgba(255, 86, 86, 0.9);
+  transform: translate(-50%, -50%) scale(1.35);
+}
+
+.aiming-laser-spot {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  border: 2px solid rgba(255, 92, 92, 0.28);
+  background: rgba(255, 92, 92, 0.06);
+  z-index: 1;
+  transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.aiming-laser-spot.active {
+  border-color: rgba(255, 92, 92, 0.82);
+  background: rgba(255, 92, 92, 0.16);
+  box-shadow: 0 0 16px rgba(255, 92, 92, 0.22);
 }
 
 .aiming-smear-bar {
@@ -2502,55 +2710,53 @@ code {
 }
 
 .aiming-frame-row {
-  display: grid;
-  grid-template-columns: 92px minmax(0, 1fr);
-  gap: 10px;
-  align-items: center;
+  display: block;
+  width: 100%;
 }
 
-.aiming-frame-row.active .aiming-frame-label strong {
-  color: var(--text);
-}
-
-.aiming-frame-label {
-  display: grid;
-  gap: 2px;
-  color: var(--muted);
-  font-size: 0.76rem;
+.aiming-frame-row.incoming {
+  animation: aiming-frame-drop 1100ms cubic-bezier(0.18, 0.82, 0.22, 1);
 }
 
 .aiming-frame-strip {
   position: relative;
-  height: 20px;
-  border-radius: 999px;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 14px;
   border: 1px solid rgba(126, 191, 160, 0.12);
   background: rgba(3, 8, 8, 0.88);
   overflow: hidden;
 }
 
-.aiming-frame-smear {
-  position: absolute;
-  top: 50%;
-  height: 8px;
-  border-radius: 999px;
-  transform: translateY(-50%);
-  background: linear-gradient(90deg, rgba(255, 211, 107, 0.18), rgba(255, 211, 107, 0.72));
+.aiming-frame-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
 }
 
-.aiming-frame-centroid {
-  position: absolute;
-  top: 50%;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  transform: translate(-50%, -50%);
-  border: 2px solid #8be0ff;
-  background: rgba(3, 8, 8, 0.96);
+.aiming-frame-path {
+  fill: none;
+  stroke: rgba(255, 211, 107, 0.82);
+  stroke-width: 3.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
-.aiming-chart-grid {
-  display: grid;
-  gap: 14px;
+.aiming-frame-path.faint {
+  stroke: rgba(255, 211, 107, 0.36);
+}
+
+.aiming-frame-centroid-dot {
+  fill: #8be0ff;
+}
+
+.aiming-chart-axis {
+  stroke: rgba(214, 232, 224, 0.16);
+  stroke-width: 1.2;
+}
+
+.aiming-chart-point-target {
+  fill: #ffd36b;
 }
 
 .aiming-chart-svg {
@@ -2561,12 +2767,20 @@ code {
   background: rgba(4, 9, 8, 0.86);
 }
 
+.aiming-chart-scale-text {
+  fill: rgba(214, 232, 224, 0.62);
+  font-size: 11px;
+}
+
 .aiming-chart-path-target,
 .aiming-chart-path-mirror,
 .aiming-chart-path-error,
 .aiming-chart-path-platform,
 .aiming-chart-path-command,
-.aiming-chart-path-measurement {
+.aiming-chart-path-measurement,
+.aiming-chart-path-laser,
+.aiming-chart-path-temperature,
+.aiming-chart-path-shot-rate {
   fill: none;
   stroke-width: 2.1;
 }
@@ -2595,6 +2809,24 @@ code {
   stroke: #8be0ff;
 }
 
+.aiming-chart-path-laser {
+  stroke: #ff6767;
+}
+
+.aiming-chart-path-temperature {
+  stroke: #ff9966;
+}
+
+.aiming-chart-path-shot-rate {
+  stroke: #f0c85f;
+}
+
+.aiming-chart-threshold {
+  stroke: rgba(255, 140, 110, 0.38);
+  stroke-width: 1.2;
+  stroke-dasharray: 6 5;
+}
+
 .aiming-chart-legend {
   display: flex;
   flex-wrap: wrap;
@@ -2612,6 +2844,38 @@ code {
   margin-right: 6px;
   border-radius: 50%;
   vertical-align: -1px;
+}
+
+@keyframes aiming-reel-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes aiming-sensor-flash {
+  0% {
+    opacity: 0;
+  }
+  25% {
+    opacity: 0.72;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes aiming-frame-drop {
+  from {
+    opacity: 0;
+    transform: translateY(-18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .legend-target::before {
@@ -2636,6 +2900,22 @@ code {
 
 .legend-measurement::before {
   background: #8be0ff;
+}
+
+.legend-laser::before {
+  background: #ff6767;
+}
+
+.legend-temperature::before {
+  background: #ff9966;
+}
+
+.legend-threshold::before {
+  background: rgba(255, 180, 153, 0.78);
+}
+
+.legend-shot-rate::before {
+  background: #f0c85f;
 }
 
 .aiming-controls {
@@ -2669,6 +2949,20 @@ code {
 
 .aiming-control input[type="range"] {
   width: 100%;
+}
+
+.aiming-control select {
+  width: 100%;
+  border-radius: 10px;
+  border: 1px solid rgba(122, 222, 188, 0.22);
+  background: rgba(5, 18, 16, 0.92);
+  color: var(--text);
+  padding: 8px 10px;
+}
+
+.aiming-control small {
+  color: var(--muted);
+  line-height: 1.35;
 }
 
 .aiming-note-block strong {
@@ -2882,8 +3176,16 @@ code {
     grid-template-columns: 1fr;
   }
 
-  .aiming-live-grid {
+  .aiming-top-charts {
     grid-template-columns: 1fr;
+  }
+
+  .aiming-controls {
+    position: static;
+  }
+
+  .aiming-sensor-card {
+    width: 100%;
   }
 }
 

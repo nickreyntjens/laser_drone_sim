@@ -14,6 +14,7 @@ describe("ControlPanel", () => {
         seed={17}
         onApply={vi.fn()}
         onEditSafetyZone={vi.fn()}
+        onOpenScenarioManager={vi.fn()}
         onRandomize={vi.fn()}
         onRestart={vi.fn()}
         onToggleRun={vi.fn()}
@@ -36,6 +37,7 @@ describe("ControlPanel", () => {
         seed={17}
         onApply={vi.fn()}
         onEditSafetyZone={vi.fn()}
+        onOpenScenarioManager={vi.fn()}
         onRandomize={vi.fn()}
         onRestart={vi.fn()}
         onToggleRun={vi.fn()}
@@ -57,6 +59,7 @@ describe("ControlPanel", () => {
         seed={17}
         onApply={vi.fn()}
         onEditSafetyZone={vi.fn()}
+        onOpenScenarioManager={vi.fn()}
         onRandomize={vi.fn()}
         onRestart={vi.fn()}
         onToggleRun={vi.fn()}
@@ -77,6 +80,7 @@ describe("ControlPanel", () => {
         seed={17}
         onApply={vi.fn()}
         onEditSafetyZone={vi.fn()}
+        onOpenScenarioManager={vi.fn()}
         onRandomize={vi.fn()}
         onRestart={vi.fn()}
         onToggleRun={vi.fn()}
@@ -88,5 +92,26 @@ describe("ControlPanel", () => {
     expect(markup).toContain("Rice / egg mass");
     expect(markup).toContain("Orchard / stink bug");
     expect(markup).toContain("Greenhouse / caterpillar");
+  });
+
+  it("includes a scenario manager entry in setup", () => {
+    const markup = renderToStaticMarkup(
+      <ControlPanel
+        activeParams={defaultParameters}
+        draftParams={defaultParameters}
+        hasPendingChanges={false}
+        isRunning={true}
+        seed={17}
+        onApply={vi.fn()}
+        onEditSafetyZone={vi.fn()}
+        onOpenScenarioManager={vi.fn()}
+        onRandomize={vi.fn()}
+        onRestart={vi.fn()}
+        onToggleRun={vi.fn()}
+        onParamChange={vi.fn()}
+      />
+    );
+
+    expect(markup).toContain("Scenario manager");
   });
 });

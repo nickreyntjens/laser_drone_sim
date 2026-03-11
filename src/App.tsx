@@ -250,6 +250,7 @@ export default function App(): JSX.Element {
   const [fieldReferenceVisible, setFieldReferenceVisible] = useState(false);
   const [pendingFieldReferenceFieldType, setPendingFieldReferenceFieldType] = useState<FieldType | null>(null);
   const [suppressFarmerSafetyToast, setSuppressFarmerSafetyToast] = useState(false);
+  const [showStandaloneSiteBalloon, setShowStandaloneSiteBalloon] = useState(!isEmbedded);
   const [safetyEditorDraft, setSafetyEditorDraft] = useState<SafetyZoneEditorDraft | null>(
     runtimeConfig.startSafetyEditor ? createSafetyEditorDraft(persistedState.activeParams) : null
   );
@@ -871,16 +872,28 @@ export default function App(): JSX.Element {
     previousSummaryRef.current = missionComplete;
   }, [snapshot.summary]);
 
+  useEffect(() => {
+    if (!isStandalonePage || typeof window === "undefined") {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setShowStandaloneSiteBalloon(false);
+    }, 10_500);
+
+    return () => window.clearTimeout(timer);
+  }, [isStandalonePage]);
+
   return (
     <div className="app-shell app-shell-embed">
-      {!isEmbedded && !isExpanded ? (
+      {showStandaloneSiteBalloon && isStandalonePage ? (
         <a
-          className="company-link"
+          className="standalone-site-balloon"
           href="https://www.photonicinsecticides.com"
           target="_blank"
           rel="noreferrer"
         >
-          Photonic insecticides
+          www.photonicinsecticides.com
         </a>
       ) : null}
       <main className="main-grid">
@@ -1214,14 +1227,6 @@ export default function App(): JSX.Element {
           ) : null}
         </section>
 
-        {isStandalonePage ? (
-          <div className="standalone-company-link">
-            <span>Built for</span>
-            <a href="https://www.photonicinsecticides.com" target="_blank" rel="noreferrer">
-              Photonic insecticides
-            </a>
-          </div>
-        ) : null}
       </main>
     </div>
   );

@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BuildPromptPanel } from "./components/BuildPromptPanel";
 import { ControlPanel } from "./components/ControlPanel";
+import {
+  AimingLabPanel,
+  createDefaultAimingLabParameters
+} from "./components/AimingLabPanel";
 import { GuideAvatar } from "./components/GuideAvatar";
 import { GuideSetupPanel } from "./components/GuideSetupPanel";
 import { LiveMetrics } from "./components/LiveMetrics";
@@ -38,6 +42,7 @@ type OverlayScreen =
   | "report"
   | "notes"
   | "guideSetup"
+  | "aiming"
   | "buildPrompt"
   | "safetyZone"
   | null;
@@ -166,7 +171,7 @@ export default function App(): JSX.Element {
     runtimeConfig.startSafetyEditor ? "safetyZone" : null
   );
   const [isExpanded, setIsExpanded] = useState(
-    runtimeConfig.startExpanded || runtimeConfig.startSafetyEditor
+    !isEmbedded || runtimeConfig.startExpanded || runtimeConfig.startSafetyEditor
   );
   const [controlsHidden, setControlsHidden] = useState(false);
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(PLAYBACK_SPEED);
@@ -180,6 +185,7 @@ export default function App(): JSX.Element {
     runtimeConfig.startSafetyEditor ? createSafetyEditorDraft(initialParams) : null
   );
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
+  const [aimingLabParams, setAimingLabParams] = useState(createDefaultAimingLabParameters);
   const watchSecondsRef = useRef(0);
   const buildToastTriggeredRef = useRef(false);
   const fieldReferenceShownForRef = useRef<FieldType | null>(null);
@@ -420,6 +426,17 @@ export default function App(): JSX.Element {
       <GuideSetupPanel
         disabledLineIds={disabledLineIds}
         onToggleLine={setLineEnabled}
+      />
+    ) : activeOverlay === "aiming" ? (
+      <AimingLabPanel
+        params={aimingLabParams}
+        onChange={(patch) =>
+          setAimingLabParams((current) => ({
+            ...current,
+            ...patch
+          }))
+        }
+        onReset={() => setAimingLabParams(createDefaultAimingLabParameters())}
       />
     ) : activeOverlay === "buildPrompt" ? (
       <BuildPromptPanel />
@@ -865,6 +882,15 @@ export default function App(): JSX.Element {
                         >
                           Guide setup
                         </button>
+                        <button
+                          className={activeOverlay === "aiming" ? "camera-button active" : "camera-button"}
+                          onClick={() => {
+                            toggleOverlay("aiming");
+                            setActionMenuOpen(false);
+                          }}
+                        >
+                          Aiming
+                        </button>
                         <button className="secondary-button" onClick={restartMission}>
                           Restart
                         </button>
@@ -930,14 +956,16 @@ export default function App(): JSX.Element {
               }
               onClick={closeOverlay}
             >
-              <div
-                className={
-                  activeOverlay === "safetyZone"
-                    ? "scene-overlay-frame scene-overlay-frame-safety"
-                    : "scene-overlay-frame"
-                }
-                onClick={(event) => event.stopPropagation()}
-              >
+                <div
+                  className={
+                    activeOverlay === "safetyZone"
+                      ? "scene-overlay-frame scene-overlay-frame-safety"
+                      : activeOverlay === "aiming"
+                        ? "scene-overlay-frame scene-overlay-frame-wide"
+                      : "scene-overlay-frame"
+                  }
+                  onClick={(event) => event.stopPropagation()}
+                >
                 <button className="overlay-close" onClick={closeOverlay}>
                   Close
                 </button>

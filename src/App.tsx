@@ -16,6 +16,7 @@ import {
   SafetyZonePanel
 } from "./components/SafetyZonePanel";
 import { SceneHud } from "./components/SceneHud";
+import { ShowcaseOverlay } from "./components/ShowcaseOverlay";
 import { SafetyEditorPreviewState, SimulationScene } from "./components/SimulationScene";
 import { SummaryPanel } from "./components/SummaryPanel";
 import { useMissionAudio } from "./hooks/useMissionAudio";
@@ -57,6 +58,9 @@ type CameraMode = "follow" | "followSide" | "overview" | "dock" | "manual";
 const FARMER_SAFETY_TOAST_COOLDOWN_MS = 90_000;
 const FARMER_SAFETY_TOAST_AUTO_DISMISS_MS = 12_000;
 const BUILD_TOAST_DELAY_S = 240;
+// Showcase mode: self-running landing-page presentation.
+const SHOWCASE_PLAYBACK_SPEED = 40;
+const SHOWCASE_RESTART_DELAY_MS = 9_000;
 
 type OverlayScreen =
   | "setup"
@@ -116,6 +120,7 @@ function readRuntimeConfig(): {
   initialCameraMode: CameraMode;
   startExpanded: boolean;
   startSafetyEditor: boolean;
+  startInLab: boolean;
   markerModeOverride: "selected" | "all" | null;
 } {
   const search =
@@ -137,6 +142,7 @@ function readRuntimeConfig(): {
     initialCameraMode,
     startExpanded: search.get("expanded") === "1",
     startSafetyEditor: search.get("safetyEditor") === "1",
+    startInLab: search.get("lab") === "1" || search.get("safetyEditor") === "1",
     markerModeOverride:
       search.get("markers") === "all"
         ? "all"
@@ -251,6 +257,9 @@ export default function App(): JSX.Element {
     !isEmbedded || runtimeConfig.startExpanded || runtimeConfig.startSafetyEditor
   );
   const [controlsHidden, setControlsHidden] = useState(false);
+  const [uiMode, setUiMode] = useState<"showcase" | "lab">(
+    runtimeConfig.startInLab ? "lab" : "showcase"
+  );
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(persistedState.playbackSpeed);
   const [showBuildToast, setShowBuildToast] = useState(false);
   const [showMissionCompleteToast, setShowMissionCompleteToast] = useState(false);
@@ -331,6 +340,22 @@ export default function App(): JSX.Element {
     return () => window.clearTimeout(timer);
   }, [farmerSafetyToast]);
 
+  // Showcase mode runs the demo as a self-paced time-lapse; remember the
+  // visitor's own speed so "Explore the model" restores it.
+  const labPlaybackSpeedRef = useRef(persistedState.playbackSpeed);
+  useEffect(() => {
+    if (uiMode === "showcase") {
+      setPlaybackSpeed((current) => {
+        if (current !== SHOWCASE_PLAYBACK_SPEED) {
+          labPlaybackSpeedRef.current = current;
+        }
+        return SHOWCASE_PLAYBACK_SPEED;
+      });
+    } else {
+      setPlaybackSpeed(labPlaybackSpeedRef.current);
+    }
+  }, [uiMode]);
+
   const handleMissionLog = useCallback((entry: MissionLogEvent): void => {
     if (entry.event !== "safety-hold") {
       return;
@@ -408,6 +433,7 @@ export default function App(): JSX.Element {
     }
   }, [activeOverlay, isRunning, setIsRunning]);
   const safetyEditorActive = activeOverlay === "safetyZone" && safetyEditorDraft !== null;
+  const showcaseActive = uiMode === "showcase" && !safetyEditorActive;
   const {
     guideEnabled,
     toggleGuide,
@@ -901,6 +927,20 @@ export default function App(): JSX.Element {
     previousSummaryRef.current = missionComplete;
   }, [snapshot.summary]);
 
+  // Showcase loops forever: after the result card has had its moment,
+  // reseed and run a fresh field.
+  useEffect(() => {
+    if (!showcaseActive || snapshot.summary === null || typeof window === "undefined") {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setSeed((value) => value + 1);
+      setScenarioVersion((value) => value + 1);
+    }, SHOWCASE_RESTART_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [showcaseActive, snapshot.summary]);
+
   useEffect(() => {
     if (!isStandalonePage || typeof window === "undefined") {
       return;
@@ -936,7 +976,7 @@ export default function App(): JSX.Element {
             introProgress={introProgress}
             isIntroActive={isIntroActive}
             isExpanded={isExpanded}
-            controlsHidden={controlsHidden || safetyEditorActive}
+            controlsHidden={controlsHidden || safetyEditorActive || showcaseActive}
             isMobileUi={isMobileUi}
             mobileMenuOpen={actionMenuOpen}
             playbackSpeed={playbackSpeed}
@@ -948,7 +988,20 @@ export default function App(): JSX.Element {
             onCameraModeChange={setCameraMode}
             safetyEditorPreview={safetyEditorActive ? safetyEditorPreview : null}
           />
-          {!safetyEditorActive ? (
+          {showcaseActive ? (
+            <ShowcaseOverlay
+              snapshot={snapshot}
+              isIntroActive={isIntroActive}
+              playbackSpeed={playbackSpeed}
+              safetyHold={farmerSafetyToast !== null}
+              onFieldTypeChange={applyFieldTypeSelection}
+              onExplore={() => {
+                setUiMode("lab");
+                setIsExpanded(true);
+              }}
+            />
+          ) : null}
+          {!safetyEditorActive && !showcaseActive ? (
             <SceneHud
               snapshot={snapshot}
               isIntroActive={isIntroActive}
@@ -958,7 +1011,7 @@ export default function App(): JSX.Element {
             />
           ) : null}
 
-          {!controlsHidden && !safetyEditorActive ? (
+          {!controlsHidden && !safetyEditorActive && !showcaseActive ? (
             <div className={isExpanded ? "scene-toast-stack scene-toast-stack-expanded" : "scene-toast-stack"}>
               {snapshot.chargeStatus ? (
               <div className="scene-toast">
@@ -1057,18 +1110,20 @@ export default function App(): JSX.Element {
             </div>
           ) : null}
 
-          <GuideAvatar
-            caption={currentCaption}
-            isSpeaking={guideSpeaking}
-            onSilence={silenceGuide}
-            onDisableLine={() => {
-              if (currentDefinitionId) {
-                disableLine(currentDefinitionId);
-              }
-            }}
-          />
+          {!showcaseActive ? (
+            <GuideAvatar
+              caption={currentCaption}
+              isSpeaking={guideSpeaking}
+              onSilence={silenceGuide}
+              onDisableLine={() => {
+                if (currentDefinitionId) {
+                  disableLine(currentDefinitionId);
+                }
+              }}
+            />
+          ) : null}
 
-          {!safetyEditorActive ? (
+          {!safetyEditorActive && !showcaseActive ? (
           <div className="scene-action-dock">
             {isExpanded ? (
               controlsHidden ? (
@@ -1088,6 +1143,9 @@ export default function App(): JSX.Element {
                       onClick={() => setActionMenuOpen((value) => !value)}
                     >
                       {actionMenuOpen ? "Close menu" : "Menu"}
+                    </button>
+                    <button className="secondary-button" onClick={() => setUiMode("showcase")}>
+                      Showcase view
                     </button>
                     <button
                       className="secondary-button"

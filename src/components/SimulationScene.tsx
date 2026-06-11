@@ -92,6 +92,44 @@ function sceneNoise(a: number, b: number): number {
   return value - Math.floor(value);
 }
 
+let soilTexture: THREE.Texture | null = null;
+
+// Procedural speckled soil so bare ground reads as tilled earth instead of a flat color fill.
+function getSoilTexture(): THREE.Texture | null {
+  if (typeof document === "undefined") {
+    return null;
+  }
+
+  if (!soilTexture) {
+    const size = 256;
+    const canvas = document.createElement("canvas");
+    canvas.width = size;
+    canvas.height = size;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return null;
+    }
+    context.fillStyle = "#8a7458";
+    context.fillRect(0, 0, size, size);
+    for (let index = 0; index < 5200; index += 1) {
+      const n1 = sceneNoise(index * 0.173, index * 0.521);
+      const n2 = sceneNoise(index * 0.713, index * 0.291);
+      const n3 = sceneNoise(index * 0.397, index * 0.823);
+      const shade = 96 + Math.floor(n3 * 96);
+      context.fillStyle = `rgba(${shade}, ${Math.floor(shade * 0.82)}, ${Math.floor(shade * 0.6)}, ${0.22 + n3 * 0.3})`;
+      const radius = 0.6 + n3 * 2.2;
+      context.beginPath();
+      context.arc(n1 * size, n2 * size, radius, 0, Math.PI * 2);
+      context.fill();
+    }
+    soilTexture = new THREE.CanvasTexture(canvas);
+    soilTexture.wrapS = THREE.RepeatWrapping;
+    soilTexture.wrapT = THREE.RepeatWrapping;
+  }
+
+  return soilTexture;
+}
+
 let denseDotTexture: THREE.Texture | null = null;
 
 // Soft radial sprite so dense-mode target points render as glowing dots instead of hard squares.
@@ -453,103 +491,163 @@ function SceneVisualTestProbe({
   return null;
 }
 
+interface CropInstance {
+  position: [number, number, number];
+  scale: [number, number, number];
+  rotation: [number, number, number];
+  color: [number, number, number];
+}
+
+function applyCropInstances(
+  mesh: THREE.InstancedMesh | null,
+  instances: CropInstance[],
+  dummy: THREE.Object3D,
+  color: THREE.Color
+): void {
+  if (!mesh) {
+    return;
+  }
+
+  for (let index = 0; index < instances.length; index += 1) {
+    const instance = instances[index];
+    dummy.position.set(instance.position[0], instance.position[1], instance.position[2]);
+    dummy.rotation.set(instance.rotation[0], instance.rotation[1], instance.rotation[2]);
+    dummy.scale.set(instance.scale[0], instance.scale[1], instance.scale[2]);
+    dummy.updateMatrix();
+    mesh.setMatrixAt(index, dummy.matrix);
+    color.setRGB(instance.color[0], instance.color[1], instance.color[2]);
+    mesh.setColorAt(index, color);
+  }
+
+  mesh.instanceMatrix.needsUpdate = true;
+  if (mesh.instanceColor) {
+    mesh.instanceColor.needsUpdate = true;
+  }
+}
+
 function CropCanopy({ snapshot }: { snapshot: SimulationSnapshot }): JSX.Element | null {
   const meshRef = useRef<THREE.InstancedMesh>(null);
+  const lobeRef = useRef<THREE.InstancedMesh>(null);
   const dummy = useMemo(() => new THREE.Object3D(), []);
-  const instances = useMemo(() => {
-    const fieldProfile = getFieldProfile(snapshot.params.fieldType);
+  const instanceColor = useMemo(() => new THREE.Color(), []);
+  const fieldProfile = getFieldProfile(snapshot.params.fieldType);
+  const { instances, lobes } = useMemo(() => {
     if (fieldProfile.cropVisualStyle === "orchard") {
-      return [];
+      return { instances: [] as CropInstance[], lobes: [] as CropInstance[] };
     }
 
+    const isRice = fieldProfile.cropVisualStyle === "rice";
     const { rowCount, rowSpacingM, alongRowPitchM } = getVisualRowMetrics(snapshot);
-    const spacingM = fieldProfile.cropVisualStyle === "rice" ? alongRowPitchM : 3.4;
+    const spacingM = isRice ? alongRowPitchM : 3.4;
     const columns = Math.max(6, Math.floor(snapshot.params.fieldLengthM / spacingM));
-    const points: Array<{
-      position: [number, number, number];
-      scale: [number, number, number];
-      rotation: [number, number, number];
-    }> = [];
+    const instances: CropInstance[] = [];
+    const lobes: CropInstance[] = [];
+    const baseColor = new THREE.Color();
 
     for (let row = 0; row < rowCount; row += 1) {
       const rowZ = row * rowSpacingM + rowSpacingM * 0.5;
       for (let column = 0; column < columns; column += 1) {
-        const x = (fieldProfile.cropVisualStyle === "rice" ? 1.4 : 1.7) + column * spacingM;
+        const x = (isRice ? 1.4 : 1.7) + column * spacingM;
         if (x > snapshot.params.fieldLengthM - 1.2) {
           continue;
         }
 
         const n1 = sceneNoise(row * 0.31, column * 0.71);
         const n2 = sceneNoise(row * 0.62 + 3, column * 0.19 + 7);
+        const n3 = sceneNoise(row * 0.47 + 11, column * 0.53 + 5);
         const point = toScenePosition(
           {
             x,
-            y:
-              fieldProfile.cropVisualStyle === "rice"
-                ? fieldProfile.maturePlantHeightM * (0.54 + n1 * 0.14)
-                : 0.16 + n1 * 0.06,
-            z:
-              rowZ +
-              (n1 - 0.5) *
-                (fieldProfile.cropVisualStyle === "rice" ? rowSpacingM * 0.16 : rowSpacingM * 0.24)
+            y: isRice
+              ? fieldProfile.maturePlantHeightM * (0.54 + n1 * 0.14)
+              : 0.16 + n1 * 0.06,
+            z: rowZ + (n1 - 0.5) * (isRice ? rowSpacingM * 0.16 : rowSpacingM * 0.24)
           },
           snapshot
         );
 
-        points.push({
+        // Per-plant hue/lightness jitter keeps the canopy from reading as one flat green.
+        baseColor.setHSL(
+          isRice ? 0.26 + n3 * 0.035 : 0.295 + n3 * 0.045,
+          isRice ? 0.34 + n2 * 0.12 : 0.38 + n2 * 0.14,
+          isRice ? 0.42 + n1 * 0.1 : 0.3 + n1 * 0.12
+        );
+        const color: [number, number, number] = [baseColor.r, baseColor.g, baseColor.b];
+
+        instances.push({
           position: [point.x, point.y, point.z],
-          scale:
-            fieldProfile.cropVisualStyle === "rice"
-              ? [
-                  0.005 + n1 * 0.003,
-                  metersToSceneUnits(fieldProfile.maturePlantHeightM * (0.74 + n2 * 0.16), snapshot.renderScaleMPerUnit),
-                  0.018 + n2 * 0.01
-                ]
-              : [0.04 + n1 * 0.035, 0.022 + n2 * 0.02, 0.05 + n2 * 0.04],
-          rotation:
-            fieldProfile.cropVisualStyle === "rice"
-              ? [0, n2 * Math.PI, (n1 - 0.5) * 0.45]
-              : [0, n2 * Math.PI, 0]
+          scale: isRice
+            ? [
+                0.005 + n1 * 0.003,
+                metersToSceneUnits(fieldProfile.maturePlantHeightM * (0.74 + n2 * 0.16), snapshot.renderScaleMPerUnit),
+                0.018 + n2 * 0.01
+              ]
+            : [0.04 + n1 * 0.035, 0.022 + n2 * 0.02, 0.05 + n2 * 0.04],
+          rotation: isRice ? [0, n2 * Math.PI, (n1 - 0.5) * 0.45] : [0, n2 * Math.PI, 0],
+          color
         });
+
+        if (!isRice) {
+          // Two offset foliage lobes per plant break up the single-blob silhouette.
+          for (let lobeIndex = 0; lobeIndex < 2; lobeIndex += 1) {
+            const ln = sceneNoise(row * 1.13 + lobeIndex * 19, column * 0.91 + lobeIndex * 7);
+            const angle = ln * Math.PI * 2;
+            const reach = 0.035 + ln * 0.03;
+            baseColor.setHSL(0.29 + ln * 0.05, 0.4 + n3 * 0.12, 0.27 + ln * 0.13);
+            lobes.push({
+              position: [
+                point.x + Math.cos(angle) * reach,
+                point.y + 0.004 + ln * 0.012,
+                point.z + Math.sin(angle) * reach
+              ],
+              scale: [0.026 + ln * 0.022, 0.015 + ln * 0.012, 0.03 + ln * 0.024],
+              rotation: [0, angle, (ln - 0.5) * 0.4],
+              color: [baseColor.r, baseColor.g, baseColor.b]
+            });
+          }
+        }
       }
     }
 
-    return points;
-  }, [snapshot]);
+    return { instances, lobes };
+  }, [fieldProfile, snapshot]);
 
   useLayoutEffect(() => {
-    if (!meshRef.current) {
-      return;
-    }
-
-    for (let index = 0; index < instances.length; index += 1) {
-      const instance = instances[index];
-      dummy.position.set(instance.position[0], instance.position[1], instance.position[2]);
-      dummy.rotation.set(instance.rotation[0], instance.rotation[1], instance.rotation[2]);
-      dummy.scale.set(instance.scale[0], instance.scale[1], instance.scale[2]);
-      dummy.updateMatrix();
-      meshRef.current.setMatrixAt(index, dummy.matrix);
-    }
-
-    meshRef.current.instanceMatrix.needsUpdate = true;
-  }, [dummy, instances]);
+    applyCropInstances(meshRef.current, instances, dummy, instanceColor);
+    applyCropInstances(lobeRef.current, lobes, dummy, instanceColor);
+  }, [dummy, instanceColor, instances, lobes]);
 
   if (instances.length === 0) {
     return null;
   }
 
   return (
-    <instancedMesh ref={meshRef} args={[undefined, undefined, instances.length]} castShadow receiveShadow>
-      {getFieldProfile(snapshot.params.fieldType).cropVisualStyle === "rice" ? (
-        <boxGeometry args={[1, 1, 1]} />
-      ) : (
-        <sphereGeometry args={[1, 7, 7]} />
-      )}
-      <meshStandardMaterial
-        color={getFieldProfile(snapshot.params.fieldType).cropVisualStyle === "rice" ? "#7bb86a" : "#5d8e56"}
-        roughness={0.93}
-      />
-    </instancedMesh>
+    <group>
+      <instancedMesh
+        ref={meshRef}
+        args={[undefined, undefined, instances.length]}
+        castShadow
+        receiveShadow
+      >
+        {fieldProfile.cropVisualStyle === "rice" ? (
+          <boxGeometry args={[1, 1, 1]} />
+        ) : (
+          <sphereGeometry args={[1, 8, 6]} />
+        )}
+        <meshStandardMaterial color="#ffffff" roughness={0.93} />
+      </instancedMesh>
+      {lobes.length > 0 ? (
+        <instancedMesh
+          ref={lobeRef}
+          args={[undefined, undefined, lobes.length]}
+          castShadow
+          receiveShadow
+        >
+          <sphereGeometry args={[1, 7, 5]} />
+          <meshStandardMaterial color="#ffffff" roughness={0.95} />
+        </instancedMesh>
+      ) : null}
+    </group>
   );
 }
 
@@ -992,6 +1090,32 @@ function FieldSurface({ snapshot }: { snapshot: SimulationSnapshot }): JSX.Eleme
   const fieldLength = snapshot.params.fieldLengthM / snapshot.renderScaleMPerUnit;
   const fieldWidth = snapshot.params.fieldWidthM / snapshot.renderScaleMPerUnit;
   const fieldProfile = getFieldProfile(snapshot.params.fieldType);
+  const usesSoilTexture =
+    fieldProfile.cropVisualStyle === "potato" || fieldProfile.cropVisualStyle === "orchard";
+  const soilBaseMap = useMemo(() => {
+    if (!usesSoilTexture) {
+      return undefined;
+    }
+    const texture = getSoilTexture()?.clone();
+    if (!texture) {
+      return undefined;
+    }
+    texture.repeat.set(Math.max(fieldLength / 3, 4), Math.max(fieldWidth / 3, 4));
+    texture.needsUpdate = true;
+    return texture;
+  }, [fieldLength, fieldWidth, usesSoilTexture]);
+  const soilRowMap = useMemo(() => {
+    if (fieldProfile.cropVisualStyle !== "potato") {
+      return undefined;
+    }
+    const texture = getSoilTexture()?.clone();
+    if (!texture) {
+      return undefined;
+    }
+    texture.repeat.set(Math.max(fieldLength / 3, 4), 1);
+    texture.needsUpdate = true;
+    return texture;
+  }, [fieldLength, fieldProfile.cropVisualStyle]);
   const { rowCount, rowSpacingM } = getVisualRowMetrics(snapshot);
   const rowWidth =
     fieldProfile.cropVisualStyle === "orchard"
@@ -1019,7 +1143,12 @@ function FieldSurface({ snapshot }: { snapshot: SimulationSnapshot }): JSX.Eleme
         />
       </mesh>
 
-      <mesh receiveShadow rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.004, 0]}>
+      <mesh
+        key={`base-${fieldProfile.cropVisualStyle}`}
+        receiveShadow
+        rotation={[-Math.PI / 2, 0, 0]}
+        position={[0, -0.004, 0]}
+      >
         <planeGeometry args={[fieldLength + 1, fieldWidth + 1]} />
         <meshStandardMaterial
           color={
@@ -1029,9 +1158,10 @@ function FieldSurface({ snapshot }: { snapshot: SimulationSnapshot }): JSX.Eleme
                 ? "#4f6d49"
                 : fieldProfile.cropVisualStyle === "greenhouse"
                   ? "#454c41"
-                : "#3b2d23"
+                : "#4a3a2c"
           }
           roughness={1}
+          map={soilBaseMap}
         />
       </mesh>
 
@@ -1052,7 +1182,11 @@ function FieldSurface({ snapshot }: { snapshot: SimulationSnapshot }): JSX.Eleme
         const sceneRow = toScenePosition({ x: snapshot.params.fieldLengthM * 0.5, y: 0.05, z: rowCenter }, snapshot);
 
         return (
-          <mesh key={rowIndex} position={[0, 0.01, sceneRow.z]} receiveShadow>
+          <mesh
+            key={`${fieldProfile.cropVisualStyle}-${rowIndex}`}
+            position={[0, 0.01, sceneRow.z]}
+            receiveShadow
+          >
             <boxGeometry args={[fieldLength, 0.025, rowWidth]} />
             <meshStandardMaterial
               color={
@@ -1062,9 +1196,10 @@ function FieldSurface({ snapshot }: { snapshot: SimulationSnapshot }): JSX.Eleme
                     ? "#715c40"
                     : fieldProfile.cropVisualStyle === "greenhouse"
                       ? "#4c5a3e"
-                    : "#6e5735"
+                    : "#7c5f3c"
               }
               roughness={0.96}
+              map={soilRowMap}
             />
           </mesh>
         );
@@ -1531,13 +1666,13 @@ function DroneVisual({
   rotorSpinScale?: number;
   bodyColor?: string;
 }): JSX.Element {
-  const rotorsRef = useRef<Array<THREE.Mesh | null>>([]);
+  const rotorsRef = useRef<Array<THREE.Group | null>>([]);
 
   useFrame((_state, delta) => {
     for (let index = 0; index < rotorsRef.current.length; index += 1) {
       const rotor = rotorsRef.current[index];
       if (rotor) {
-        rotor.rotation.y += delta * 35 * rotorSpinScale;
+        rotor.rotation.y += delta * 35 * rotorSpinScale * (index % 2 === 0 ? 1 : -1);
       }
     }
   });
@@ -1564,10 +1699,34 @@ function DroneVisual({
         <boxGeometry args={[0.12, 0.08, 0.12]} />
         <meshStandardMaterial color="#1f2427" metalness={0.35} roughness={0.4} />
       </mesh>
-      <mesh castShadow position={[0, 0.02, 0]}>
-        <boxGeometry args={[0.1, 0.06, 0.1]} />
-        <meshStandardMaterial color="#1b2022" metalness={0.25} roughness={0.42} />
+      {/* GPS dome and status light on top. */}
+      <mesh castShadow position={[0, 0.25, -0.06]}>
+        <sphereGeometry args={[0.05, 12, 12, 0, Math.PI * 2, 0, Math.PI * 0.5]} />
+        <meshStandardMaterial color="#e8eef0" metalness={0.3} roughness={0.4} />
       </mesh>
+      <mesh position={[0, 0.245, 0.1]}>
+        <sphereGeometry args={[0.018, 8, 8]} />
+        <meshBasicMaterial color="#52e6a0" />
+      </mesh>
+      {/* Two-axis laser gimbal: yoke, turret ball, and downward lens barrel. */}
+      <group position={[0, 0.0, 0]}>
+        <mesh castShadow position={[0, 0.05, 0]}>
+          <cylinderGeometry args={[0.045, 0.045, 0.05, 14]} />
+          <meshStandardMaterial color="#39444b" metalness={0.55} roughness={0.32} />
+        </mesh>
+        <mesh castShadow position={[0, -0.01, 0]}>
+          <sphereGeometry args={[0.085, 16, 16]} />
+          <meshStandardMaterial color="#222a2e" metalness={0.6} roughness={0.28} />
+        </mesh>
+        <mesh castShadow position={[0, -0.085, 0]}>
+          <cylinderGeometry args={[0.032, 0.042, 0.09, 14]} />
+          <meshStandardMaterial color="#11171a" metalness={0.65} roughness={0.24} />
+        </mesh>
+        <mesh position={[0, -0.132, 0]}>
+          <cylinderGeometry args={[0.024, 0.024, 0.008, 12]} />
+          <meshBasicMaterial color="#ff5a40" />
+        </mesh>
+      </group>
 
       {[
         [0.37, 0.19, 0.37],
@@ -1580,13 +1739,21 @@ function DroneVisual({
             <cylinderGeometry args={[0.06, 0.08, 0.09, 18]} />
             <meshStandardMaterial color="#2f3940" metalness={0.45} roughness={0.32} />
           </mesh>
-          <mesh ref={(element) => (rotorsRef.current[index] = element)} position={[0, 0.02, 0]}>
-            <cylinderGeometry args={[0.02, 0.02, 0.02, 10]} />
-            <meshBasicMaterial color="#f4fbff" transparent opacity={0.65} />
-          </mesh>
+          <group ref={(element) => (rotorsRef.current[index] = element)} position={[0, 0.025, 0]}>
+            <mesh>
+              <cylinderGeometry args={[0.024, 0.024, 0.026, 10]} />
+              <meshStandardMaterial color="#1c2225" metalness={0.5} roughness={0.35} />
+            </mesh>
+            {[0, 1].map((blade) => (
+              <mesh key={blade} rotation={[0, blade * Math.PI, 0]} position={[0, 0.012, 0]}>
+                <boxGeometry args={[0.46, 0.006, 0.04]} />
+                <meshStandardMaterial color="#202628" metalness={0.4} roughness={0.4} />
+              </mesh>
+            ))}
+          </group>
           <mesh position={[0, 0.02, 0]}>
             <cylinderGeometry args={[0.26, 0.26, 0.012, 32]} />
-            <meshBasicMaterial color="#dfe7ea" transparent opacity={0.25} depthWrite={false} />
+            <meshBasicMaterial color="#dfe7ea" transparent opacity={0.18} depthWrite={false} />
           </mesh>
         </group>
       ))}
@@ -2428,24 +2595,61 @@ function BeetleMarker({
           </mesh>
         </group>
       ) : (
-        <mesh
-          castShadow
+        <group
           scale={[
             scale * 0.8,
             scale * 0.56 * introState.landingSquash,
             scale
           ]}
         >
-          <sphereGeometry args={[1, 12, 12]} />
-          <meshStandardMaterial
-            color={color}
-            emissive={target.alive ? haloColor : "#1d201d"}
-            emissiveIntensity={target.alive ? 0.24 : 0.08}
-            transparent
-            opacity={animatedOpacity}
-            roughness={0.46}
-          />
-        </mesh>
+          {/* Striped elytra over a cream body, orange pronotum, dark head: Colorado potato beetle. */}
+          <mesh castShadow>
+            <sphereGeometry args={[1, 12, 12]} />
+            <meshStandardMaterial
+              color={target.alive ? "#e8d9a0" : color}
+              emissive={target.alive ? haloColor : "#1d201d"}
+              emissiveIntensity={target.alive ? 0.16 : 0.08}
+              transparent
+              opacity={animatedOpacity}
+              roughness={0.42}
+            />
+          </mesh>
+          {target.alive
+            ? [-0.62, -0.22, 0.22, 0.62].map((stripeZ) => (
+                <mesh key={stripeZ} position={[0.12, 0.62, stripeZ * 0.6]} rotation={[0, 0, -0.08]}>
+                  <boxGeometry args={[1.3, 0.55, 0.14]} />
+                  <meshStandardMaterial
+                    color="#2b241c"
+                    transparent
+                    opacity={animatedOpacity}
+                    roughness={0.5}
+                  />
+                </mesh>
+              ))
+            : null}
+          {target.alive ? (
+            <>
+              <mesh castShadow position={[-0.92, 0.1, 0]} scale={[0.5, 0.62, 0.74]}>
+                <sphereGeometry args={[1, 10, 10]} />
+                <meshStandardMaterial
+                  color="#c97f3d"
+                  transparent
+                  opacity={animatedOpacity}
+                  roughness={0.5}
+                />
+              </mesh>
+              <mesh castShadow position={[-1.32, -0.02, 0]} scale={[0.3, 0.34, 0.4]}>
+                <sphereGeometry args={[1, 8, 8]} />
+                <meshStandardMaterial
+                  color="#33271c"
+                  transparent
+                  opacity={animatedOpacity}
+                  roughness={0.55}
+                />
+              </mesh>
+            </>
+          ) : null}
+        </group>
       )}
       {showMarker ? (
         <>

@@ -2033,7 +2033,7 @@ code {
   top: 18px;
   right: 18px;
   z-index: 4;
-  width: min(440px, calc(100% - 36px));
+  width: min(340px, calc(100% - 36px));
   display: grid;
   gap: 10px;
 }

@@ -51,6 +51,13 @@ import { calculateSafetyMetrics, safetyInputFromParameters } from "./sim/safety"
 import { FieldType, MissionLogEvent, SimulationParameters } from "./sim/types";
 
 type CameraMode = "follow" | "followSide" | "overview" | "dock" | "manual";
+// Keep the first minutes of the scene clear for landing-page visitors: the
+// safety toast auto-dismisses, repeats are rate-limited, and the build-prompt
+// toast waits until the visitor has clearly settled in.
+const FARMER_SAFETY_TOAST_COOLDOWN_MS = 90_000;
+const FARMER_SAFETY_TOAST_AUTO_DISMISS_MS = 12_000;
+const BUILD_TOAST_DELAY_S = 240;
+
 type OverlayScreen =
   | "setup"
   | "scenarios"
@@ -274,6 +281,7 @@ export default function App(): JSX.Element {
   const safetyEditorResumeRef = useRef(false);
   const aimingLabResumeRef = useRef<boolean | null>(null);
   const suppressFarmerSafetyToastRef = useRef(false);
+  const lastFarmerSafetyToastAtRef = useRef(0);
   const { isMobileUi } = useResponsiveUi();
   const isStandalonePage = typeof window !== "undefined" && window.parent === window;
 
@@ -311,6 +319,18 @@ export default function App(): JSX.Element {
     suppressFarmerSafetyToastRef.current = suppressFarmerSafetyToast;
   }, [suppressFarmerSafetyToast]);
 
+  useEffect(() => {
+    if (!farmerSafetyToast || typeof window === "undefined") {
+      return;
+    }
+
+    const timer = window.setTimeout(
+      () => setFarmerSafetyToast(null),
+      FARMER_SAFETY_TOAST_AUTO_DISMISS_MS
+    );
+    return () => window.clearTimeout(timer);
+  }, [farmerSafetyToast]);
+
   const handleMissionLog = useCallback((entry: MissionLogEvent): void => {
     if (entry.event !== "safety-hold") {
       return;
@@ -319,6 +339,14 @@ export default function App(): JSX.Element {
     if (suppressFarmerSafetyToastRef.current) {
       return;
     }
+
+    // Safety holds repeat throughout a mission; rate-limit the toast so it
+    // does not keep covering the scene for landing-page visitors.
+    const now = Date.now();
+    if (now - lastFarmerSafetyToastAtRef.current < FARMER_SAFETY_TOAST_COOLDOWN_MS) {
+      return;
+    }
+    lastFarmerSafetyToastAtRef.current = now;
 
     const blockingDistanceM =
       typeof entry.data?.blockingDistanceM === "number" ? entry.data.blockingDistanceM : null;
@@ -852,7 +880,7 @@ export default function App(): JSX.Element {
 
     const timer = window.setInterval(() => {
       watchSecondsRef.current += 1;
-      if (watchSecondsRef.current >= 60) {
+      if (watchSecondsRef.current >= BUILD_TOAST_DELAY_S) {
         buildToastTriggeredRef.current = true;
         setShowBuildToast(true);
         window.clearInterval(timer);

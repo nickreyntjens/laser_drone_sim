@@ -36,6 +36,7 @@ import {
   serializeScenarioExport
 } from "./lib/scenarios";
 import { formatDuration } from "./lib/format";
+import { formatCostPerHectare, formatSavingsMultiple, savingsMultiple, SPRAY_BASELINES } from "./lib/economics";
 import { fieldReferenceImageFor } from "./content/fieldReferenceImages";
 import { buildBeamDiagramIntroLines } from "./content/guideScript";
 import {
@@ -646,7 +647,7 @@ export default function App(): JSX.Element {
     ) : activeOverlay === "telemetry" ? (
       <LiveMetrics snapshot={snapshot} isIntroActive={isIntroActive} />
     ) : activeOverlay === "report" ? (
-      <SummaryPanel summary={snapshot.summary} />
+      <SummaryPanel summary={snapshot.summary} fieldType={activeParams.fieldType} />
     ) : activeOverlay === "notes" ? (
       <MethodologyPanel snapshot={snapshot} onOpenBuildPrompt={() => openOverlay("buildPrompt")} />
     ) : activeOverlay === "guideSetup" ? (
@@ -1000,8 +1001,18 @@ export default function App(): JSX.Element {
               {showMissionCompleteToast ? (
               <div className="scene-toast scene-toast-emphasis">
                 <div>
-                  <strong>Mission complete</strong>
-                  <p>The drone cleared the current infestation and closed the energy ledger.</p>
+                  <strong>
+                    {snapshot.summary
+                      ? `Field cleared at ${formatCostPerHectare(snapshot.summary.costPerHectareUsd)} / ha`
+                      : "Mission complete"}
+                  </strong>
+                  <p>
+                    {snapshot.summary
+                      ? `${snapshot.summary.beetlesNeutralized} targets neutralized. In consumables that is roughly ` +
+                        `${formatSavingsMultiple(savingsMultiple(snapshot.summary.costPerHectareUsd, activeParams.fieldType))} cheaper than a ` +
+                        `~$${SPRAY_BASELINES[activeParams.fieldType].costPerHectareUsd}/ha ${SPRAY_BASELINES[activeParams.fieldType].label}.`
+                      : "The drone cleared the current infestation and closed the energy ledger."}
+                  </p>
                 </div>
                 {interactiveButtonsVisible ? (
                   <div className="scene-toast-actions">

@@ -9,6 +9,7 @@ import {
   formatPercent,
   formatPower
 } from "../lib/format";
+import { formatCostPerHectare } from "../lib/economics";
 
 interface LiveMetricsProps {
   snapshot: SimulationSnapshot;
@@ -80,8 +81,12 @@ export function LiveMetrics({ snapshot, isIntroActive }: LiveMetricsProps): JSX.
           <strong>{formatCurrencyUsd(metrics.batteryDepreciationCostUsd)}</strong>
         </div>
         <div className="telemetry-row">
+          <span>Charging electricity</span>
+          <strong>{formatCurrencyUsd(metrics.energyCostUsd)}</strong>
+        </div>
+        <div className="telemetry-row">
           <span>Estimated cost per hectare</span>
-          <strong>{formatCurrencyUsd(metrics.costPerHectareUsd)} / ha</strong>
+          <strong>{formatCostPerHectare(metrics.costPerHectareUsd)} / ha</strong>
         </div>
       </div>
     </section>

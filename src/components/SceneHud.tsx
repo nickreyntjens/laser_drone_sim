@@ -9,6 +9,7 @@ import {
   formatPower,
   formatSpeed
 } from "../lib/format";
+import { formatCostPerHectare, SPRAY_BASELINES } from "../lib/economics";
 
 interface SceneHudProps {
   snapshot: SimulationSnapshot;
@@ -29,6 +30,28 @@ function HudMetric({ label, value, accent = false }: HudMetricProps): JSX.Elemen
     <div className={accent ? "hud-metric hud-metric-accent" : "hud-metric"}>
       <span>{label}</span>
       <strong>{value}</strong>
+    </div>
+  );
+}
+
+function CostBadge({ snapshot }: { snapshot: SimulationSnapshot }): JSX.Element {
+  const baseline = SPRAY_BASELINES[snapshot.params.fieldType];
+  const hasData = snapshot.metrics.totalEnergyWh > 0;
+  const finished = snapshot.summary !== null;
+  const costPerHectareUsd = finished
+    ? snapshot.summary!.costPerHectareUsd
+    : snapshot.metrics.costPerHectareUsd;
+
+  return (
+    <div className="hud-cost-badge">
+      <span className="hud-cost-eyebrow">{finished ? "Treatment cost" : "Treatment cost so far"}</span>
+      <strong className="hud-cost-value">
+        {hasData ? formatCostPerHectare(costPerHectareUsd) : "—"}
+        <em>/ ha</em>
+      </strong>
+      <span className="hud-cost-baseline">
+        vs ~${baseline.costPerHectareUsd}/ha {baseline.label}
+      </span>
     </div>
   );
 }
@@ -86,6 +109,7 @@ export function SceneHud({
             </span>
           ))}
         </div>
+        {!isIntroActive ? <CostBadge snapshot={snapshot} /> : null}
       </div>
     );
   }
@@ -116,6 +140,7 @@ export function SceneHud({
             <HudMetric label="Energy used" value={formatKiloWattHours(metrics.totalEnergyWh)} />
           </div>
         ) : null}
+        {!isIntroActive ? <CostBadge snapshot={snapshot} /> : null}
       </div>
       <div className="scene-attitude-shell">
         <AttitudeIndicator drone={drone} />

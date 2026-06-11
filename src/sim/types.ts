@@ -157,6 +157,7 @@ export interface MissionMetrics {
   averageTimePerTargetS: number;
   energyPerBeetleWh: number;
   batteryDepreciationCostUsd: number;
+  energyCostUsd: number;
   costPerHectareUsd: number;
   equivalentFullCyclesUsed: number;
   energyFractions: {
@@ -176,6 +177,7 @@ export interface MissionSummary {
   averageTimePerTargetS: number;
   energyPerBeetleWh: number;
   batteryDepreciationCostUsd: number;
+  energyCostUsd: number;
   costPerHectareUsd: number;
   equivalentFullCyclesUsed: number;
   energyBreakdown: EnergyBreakdown;

@@ -1,8 +1,15 @@
-import { MissionSummary } from "../sim/types";
+import { FieldType, MissionSummary } from "../sim/types";
 import { formatCurrencyUsd, formatDuration, formatEnergy, formatPercent } from "../lib/format";
+import {
+  formatCostPerHectare,
+  formatSavingsMultiple,
+  savingsMultiple,
+  SPRAY_BASELINES
+} from "../lib/economics";
 
 interface SummaryPanelProps {
   summary: MissionSummary | null;
+  fieldType: FieldType;
 }
 
 function BreakdownBar({ summary }: { summary: MissionSummary }): JSX.Element {
@@ -42,7 +49,45 @@ function BreakdownBar({ summary }: { summary: MissionSummary }): JSX.Element {
   );
 }
 
-export function SummaryPanel({ summary }: SummaryPanelProps): JSX.Element {
+function CostStory({ summary, fieldType }: { summary: MissionSummary; fieldType: FieldType }): JSX.Element {
+  const baseline = SPRAY_BASELINES[fieldType];
+  const laserCost = summary.costPerHectareUsd;
+  const multiple = savingsMultiple(laserCost, fieldType);
+  // Keep the laser bar visible even though it is orders of magnitude shorter than the baseline.
+  const laserBarPct = Math.max((laserCost / baseline.costPerHectareUsd) * 100, 0.75);
+
+  return (
+    <div className="cost-story">
+      <div className="cost-story-headline">
+        <strong>{formatCostPerHectare(laserCost)}</strong>
+        <span> per hectare in consumables — roughly {formatSavingsMultiple(multiple)} cheaper than spraying</span>
+      </div>
+      <div className="cost-compare">
+        <div className="cost-compare-row">
+          <span>Laser drone (this run)</span>
+          <div className="cost-compare-track">
+            <i className="cost-compare-fill cost-compare-fill-laser" style={{ width: `${laserBarPct}%` }} />
+          </div>
+          <strong>{formatCostPerHectare(laserCost)}</strong>
+        </div>
+        <div className="cost-compare-row">
+          <span>Typical {baseline.label}</span>
+          <div className="cost-compare-track">
+            <i className="cost-compare-fill cost-compare-fill-spray" style={{ width: "100%" }} />
+          </div>
+          <strong>~${baseline.costPerHectareUsd}</strong>
+        </div>
+      </div>
+      <p className="cost-story-note">
+        Simulated consumables only: battery wear plus charging electricity. Drone amortization, labor, and
+        maintenance are excluded on both sides; the spray figure is an indicative single-application cost
+        for product and operation.
+      </p>
+    </div>
+  );
+}
+
+export function SummaryPanel({ summary, fieldType }: SummaryPanelProps): JSX.Element {
   return (
     <section className="panel">
       <div className="panel-heading">
@@ -57,6 +102,7 @@ export function SummaryPanel({ summary }: SummaryPanelProps): JSX.Element {
 
       {summary ? (
         <>
+          <CostStory summary={summary} fieldType={fieldType} />
           <div className="summary-grid">
             <div>
               <span>Total neutralized</span>
@@ -87,8 +133,12 @@ export function SummaryPanel({ summary }: SummaryPanelProps): JSX.Element {
               <strong>{formatCurrencyUsd(summary.batteryDepreciationCostUsd)}</strong>
             </div>
             <div>
+              <span>Charging electricity</span>
+              <strong>{formatCurrencyUsd(summary.energyCostUsd)}</strong>
+            </div>
+            <div>
               <span>Cost per hectare</span>
-              <strong>{formatCurrencyUsd(summary.costPerHectareUsd)} / ha</strong>
+              <strong>{formatCostPerHectare(summary.costPerHectareUsd)} / ha</strong>
             </div>
             <div>
               <span>Equivalent full cycles</span>

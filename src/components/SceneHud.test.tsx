@@ -33,6 +33,7 @@ function createSnapshot(): SimulationSnapshot {
       averageTimePerTargetS: 11.875,
       energyPerBeetleWh: 1.5625,
       batteryDepreciationCostUsd: 0.03,
+      energyCostUsd: 0.002,
       costPerHectareUsd: 0.003,
       equivalentFullCyclesUsed: 0.09,
       energyFractions: {

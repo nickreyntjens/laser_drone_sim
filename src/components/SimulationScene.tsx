@@ -92,6 +92,36 @@ function sceneNoise(a: number, b: number): number {
   return value - Math.floor(value);
 }
 
+let denseDotTexture: THREE.Texture | null = null;
+
+// Soft radial sprite so dense-mode target points render as glowing dots instead of hard squares.
+function getDenseDotTexture(): THREE.Texture | null {
+  if (typeof document === "undefined") {
+    return null;
+  }
+
+  if (!denseDotTexture) {
+    const size = 64;
+    const canvas = document.createElement("canvas");
+    canvas.width = size;
+    canvas.height = size;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return null;
+    }
+    const gradient = context.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+    gradient.addColorStop(0, "rgba(255,255,255,1)");
+    gradient.addColorStop(0.4, "rgba(255,255,255,0.95)");
+    gradient.addColorStop(0.7, "rgba(255,255,255,0.35)");
+    gradient.addColorStop(1, "rgba(255,255,255,0)");
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, size, size);
+    denseDotTexture = new THREE.CanvasTexture(canvas);
+  }
+
+  return denseDotTexture;
+}
+
 function TargetIcon({ fieldType }: { fieldType: FieldType }): JSX.Element {
   if (fieldType === "potatoColoradoBeetle") {
     return (
@@ -1863,18 +1893,20 @@ function LaserBeam({
   engineRef: MutableRefObject<MissionEngine>;
   snapshot: SimulationSnapshot;
 }): JSX.Element {
-  const beamRef = useRef<THREE.Mesh>(null);
+  const beamGroupRef = useRef<THREE.Group>(null);
   const impactRef = useRef<THREE.Mesh>(null);
+  const impactGlowRef = useRef<THREE.Mesh>(null);
   const start = useMemo(() => new THREE.Vector3(), []);
   const end = useMemo(() => new THREE.Vector3(), []);
   const direction = useMemo(() => new THREE.Vector3(), []);
   const midpoint = useMemo(() => new THREE.Vector3(), []);
   const beamInnerRadius = metersToSceneUnits(0.012, snapshot.renderScaleMPerUnit);
   const beamOuterRadius = metersToSceneUnits(0.022, snapshot.renderScaleMPerUnit);
+  const beamGlowRadius = metersToSceneUnits(0.055, snapshot.renderScaleMPerUnit);
   const impactRadius = metersToSceneUnits(0.09, snapshot.renderScaleMPerUnit);
 
-  useFrame(({ clock }, delta) => {
-    if (!beamRef.current || !impactRef.current) {
+  useFrame(({ clock }) => {
+    if (!beamGroupRef.current || !impactRef.current || !impactGlowRef.current) {
       return;
     }
 
@@ -1883,8 +1915,9 @@ function LaserBeam({
     const target = targetId !== null ? engine.targets[targetId] : null;
     const visible = engine.drone.mode === "firing" && !!target && target.alive;
 
-    beamRef.current.visible = visible;
+    beamGroupRef.current.visible = visible;
     impactRef.current.visible = visible;
+    impactGlowRef.current.visible = visible;
 
     if (!visible || !target) {
       return;
@@ -1896,27 +1929,51 @@ function LaserBeam({
     const length = direction.length();
     midpoint.copy(start).addScaledVector(direction, 0.5);
 
-    beamRef.current.position.copy(midpoint);
-    beamRef.current.scale.set(1, length, 1);
-    beamRef.current.quaternion.setFromUnitVectors(
+    beamGroupRef.current.position.copy(midpoint);
+    beamGroupRef.current.scale.set(1, length, 1);
+    beamGroupRef.current.quaternion.setFromUnitVectors(
       new THREE.Vector3(0, 1, 0),
       direction.normalize()
     );
 
     impactRef.current.position.copy(end);
+    impactGlowRef.current.position.copy(end);
     const pulse = 0.8 + Math.sin(clock.elapsedTime * 24) * 0.15;
     impactRef.current.scale.setScalar(pulse);
+    impactGlowRef.current.scale.setScalar(pulse * 2.1);
   });
 
   return (
     <>
-      <mesh ref={beamRef} visible={false}>
-        <cylinderGeometry args={[beamInnerRadius, beamOuterRadius, 1, 12, 1, true]} />
-        <meshBasicMaterial color="#ff6a4d" transparent opacity={0.78} depthWrite={false} />
-      </mesh>
+      <group ref={beamGroupRef} visible={false}>
+        <mesh>
+          <cylinderGeometry args={[beamInnerRadius, beamOuterRadius, 1, 12, 1, true]} />
+          <meshBasicMaterial color="#ff6a4d" transparent opacity={0.85} depthWrite={false} />
+        </mesh>
+        <mesh>
+          <cylinderGeometry args={[beamGlowRadius, beamGlowRadius * 1.4, 1, 12, 1, true]} />
+          <meshBasicMaterial
+            color="#ff8a61"
+            transparent
+            opacity={0.22}
+            depthWrite={false}
+            blending={THREE.AdditiveBlending}
+          />
+        </mesh>
+      </group>
       <mesh ref={impactRef} visible={false}>
         <sphereGeometry args={[impactRadius, 18, 18]} />
         <meshBasicMaterial color="#ffd08a" transparent opacity={0.95} depthWrite={false} />
+      </mesh>
+      <mesh ref={impactGlowRef} visible={false}>
+        <sphereGeometry args={[impactRadius, 14, 14]} />
+        <meshBasicMaterial
+          color="#ffb36b"
+          transparent
+          opacity={0.32}
+          depthWrite={false}
+          blending={THREE.AdditiveBlending}
+        />
       </mesh>
     </>
   );
@@ -2130,12 +2187,14 @@ function DenseBeetleCloud({
         <bufferAttribute attach="attributes-color" args={[payload.colors, 3]} />
       </bufferGeometry>
       <pointsMaterial
-        size={payload.pointSize}
+        size={payload.pointSize * 1.35}
         sizeAttenuation={false}
         vertexColors
         transparent
         opacity={0.96}
         depthWrite={false}
+        map={getDenseDotTexture() ?? undefined}
+        alphaTest={0.02}
       />
     </points>
   );
@@ -2555,14 +2614,14 @@ function SceneContents({
 
   return (
     <>
-      <fog attach="fog" args={["#10231d", 10, 30]} />
-      <hemisphereLight color="#d8f4de" groundColor="#2d2016" intensity={0.88} />
-      <ambientLight intensity={0.35} />
+      <fog attach="fog" args={["#16291f", 12, 38]} />
+      <hemisphereLight color="#e2f6e4" groundColor="#33251a" intensity={1.0} />
+      <ambientLight intensity={0.38} />
       <directionalLight
         castShadow
         position={[7.5, 10.5, 4.2]}
-        intensity={2.2}
-        color="#fff4d6"
+        intensity={2.5}
+        color="#fff1c8"
         shadow-mapSize-width={useDenseTargetRendering ? 1024 : 2048}
         shadow-mapSize-height={useDenseTargetRendering ? 1024 : 2048}
         shadow-camera-near={0.5}

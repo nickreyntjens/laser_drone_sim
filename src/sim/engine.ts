@@ -57,6 +57,8 @@ import {
 
 const AIR_DENSITY = 1.225;
 const GRAVITY = 9.81;
+// Farm-gate electricity price used for the charging-energy share of the cost model.
+export const ELECTRICITY_USD_PER_KWH = 0.15;
 const BRAKING_FACTOR = 0.42;
 const DESCENT_FACTOR = 0.18;
 const ATTITUDE_RESPONSE = 0.18;
@@ -166,13 +168,20 @@ function calculateBatteryDepreciationCostUsd(
   );
 }
 
+function calculateEnergyCostUsd(totalEnergyWh: number): number {
+  return (totalEnergyWh / 1000) * ELECTRICITY_USD_PER_KWH;
+}
+
 function calculateCostPerHectareUsd(
   totalEnergyWh: number,
   params: SimulationParameters
 ): number {
   const fieldAreaHectares =
     (params.fieldLengthM * params.fieldWidthM) / 10_000;
-  return calculateBatteryDepreciationCostUsd(totalEnergyWh, params) / Math.max(fieldAreaHectares, 1e-6);
+  const consumableCostUsd =
+    calculateBatteryDepreciationCostUsd(totalEnergyWh, params) +
+    calculateEnergyCostUsd(totalEnergyWh);
+  return consumableCostUsd / Math.max(fieldAreaHectares, 1e-6);
 }
 
 function isFlightMode(mode: DroneMode): boolean {
@@ -486,6 +495,7 @@ export class MissionEngine {
           this.neutralizedCount > 0 ? this.missionElapsedS / this.neutralizedCount : 0,
         energyPerBeetleWh: this.neutralizedCount > 0 ? totalEnergyWh / this.neutralizedCount : 0,
         batteryDepreciationCostUsd: calculateBatteryDepreciationCostUsd(totalEnergyWh, this.params),
+        energyCostUsd: calculateEnergyCostUsd(totalEnergyWh),
         costPerHectareUsd: calculateCostPerHectareUsd(totalEnergyWh, this.params),
         equivalentFullCyclesUsed: calculateEquivalentFullCyclesUsed(totalEnergyWh, this.params),
         energyFractions: energyFractions(this.energy)
@@ -2114,6 +2124,7 @@ export class MissionEngine {
         this.neutralizedCount > 0 ? this.missionElapsedS / this.neutralizedCount : 0,
       energyPerBeetleWh: this.neutralizedCount > 0 ? totalEnergyWh / this.neutralizedCount : 0,
       batteryDepreciationCostUsd: calculateBatteryDepreciationCostUsd(totalEnergyWh, this.params),
+      energyCostUsd: calculateEnergyCostUsd(totalEnergyWh),
       costPerHectareUsd: calculateCostPerHectareUsd(totalEnergyWh, this.params),
       equivalentFullCyclesUsed: calculateEquivalentFullCyclesUsed(totalEnergyWh, this.params),
       energyBreakdown: { ...this.energy },

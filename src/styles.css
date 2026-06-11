@@ -237,9 +237,9 @@ code {
 .eyebrow {
   display: inline-block;
   margin-bottom: 12px;
-  color: var(--accent);
-  font-size: 0.75rem;
-  letter-spacing: 0.2em;
+  color: rgba(148, 224, 192, 0.85);
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
 }
 
@@ -256,11 +256,12 @@ code {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 8px 12px;
+  padding: 8px 14px;
   border-radius: 999px;
-  border: 1px solid var(--panel-border);
-  background: rgba(10, 18, 16, 0.62);
+  border: 1px solid rgba(126, 191, 160, 0.26);
+  background: rgba(8, 15, 13, 0.72);
   color: #cfe5d8;
+  font-size: 0.82rem;
   backdrop-filter: blur(16px);
 }
 
@@ -534,13 +535,20 @@ code {
 }
 
 .metric-card span {
-  color: var(--muted);
-  font-size: 0.84rem;
+  color: rgba(148, 224, 192, 0.75);
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
 }
 
 .metric-card strong {
   font-size: 1.12rem;
   font-weight: 700;
+  color: #d9fff0;
+}
+
+.metric-card {
+  border-color: rgba(126, 191, 160, 0.16);
 }
 
 .metric-card-accent {
@@ -561,9 +569,17 @@ code {
   color: var(--muted);
 }
 
+.telemetry-row span:first-child,
+.legend-row span:first-child {
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(148, 224, 192, 0.75);
+}
+
 .telemetry-row strong,
 .legend-row strong {
-  color: var(--text);
+  color: #d9fff0;
 }
 
 .summary-grid {
@@ -581,12 +597,15 @@ code {
 .summary-grid span {
   display: block;
   margin-bottom: 4px;
-  color: var(--muted);
-  font-size: 0.84rem;
+  color: rgba(148, 224, 192, 0.75);
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
 }
 
 .summary-grid strong {
   font-size: 1.08rem;
+  color: #d9fff0;
 }
 
 .cost-story {
@@ -1753,13 +1772,16 @@ code {
 .hud-metric span {
   display: block;
   margin-bottom: 4px;
-  color: var(--muted);
-  font-size: 0.78rem;
+  color: rgba(148, 224, 192, 0.85);
+  font-size: 0.68rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
 }
 
 .hud-metric strong {
-  font-size: 1rem;
+  font-size: 1.05rem;
   line-height: 1.1;
+  color: #d9fff0;
 }
 
 .hud-cost-badge {
@@ -1981,13 +2003,16 @@ code {
 
 .attitude-header span,
 .attitude-footer span {
-  color: var(--muted);
-  font-size: 0.58rem;
+  color: rgba(148, 224, 192, 0.7);
+  font-size: 0.56rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
 }
 
 .attitude-header strong {
   font-size: 0.7rem;
   line-height: 1.2;
+  color: #d9fff0;
 }
 
 .attitude-gauge {

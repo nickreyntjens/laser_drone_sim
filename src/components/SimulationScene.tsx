@@ -1,10 +1,12 @@
-import { MutableRefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { MutableRefObject, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Html } from "@react-three/drei";
 import { Text } from "@react-three/drei/core/Text";
 import { OrbitControls } from "@react-three/drei/core/OrbitControls";
 import { Line } from "@react-three/drei/core/Line";
 import { Sky } from "@react-three/drei/core/Sky";
+import { useGLTF } from "@react-three/drei/core/useGLTF";
+import { Bloom, EffectComposer, SMAA } from "@react-three/postprocessing";
 import * as THREE from "three";
 import { clamp } from "../sim/defaults";
 import { MissionEngine } from "../sim/engine";
@@ -1778,6 +1780,82 @@ function DroneVisual({
   );
 }
 
+const DRONE_MODEL_URL = "/models/drone.glb";
+const BEETLE_MODEL_URL = "/models/beetle.glb";
+
+// Normalize an arbitrary glTF scene: largest dimension scaled to targetSize, centered, shadows on.
+function normalizeGltfScene(
+  source: THREE.Group,
+  targetSize: number,
+  verticalCenterOffset: number
+): THREE.Group {
+  const scene = source.clone(true);
+  const box = new THREE.Box3().setFromObject(scene);
+  const size = box.getSize(new THREE.Vector3());
+  const maxDimension = Math.max(size.x, size.y, size.z) || 1;
+  const factor = targetSize / maxDimension;
+  scene.scale.setScalar(factor);
+  const center = box.getCenter(new THREE.Vector3()).multiplyScalar(factor);
+  scene.position.set(-center.x, -center.y + verticalCenterOffset, -center.z);
+  scene.traverse((object) => {
+    if ((object as THREE.Mesh).isMesh) {
+      object.castShadow = true;
+      object.receiveShadow = true;
+    }
+  });
+  return scene;
+}
+
+function GltfDroneModel({ droneScale }: { droneScale: number }): JSX.Element {
+  const gltf = useGLTF(DRONE_MODEL_URL);
+  const model = useMemo(
+    () => normalizeGltfScene(gltf.scene, 1.16, 0.1),
+    [gltf.scene]
+  );
+
+  return (
+    <group scale={[droneScale, droneScale, droneScale]}>
+      <primitive object={model} />
+    </group>
+  );
+}
+
+// Real drone asset with the procedural model as loading fallback, so the scene
+// is never empty while the .glb streams in.
+function DroneModel(props: {
+  droneScale: number;
+  rotorSpinScale?: number;
+  bodyColor?: string;
+}): JSX.Element {
+  return (
+    <Suspense fallback={<DroneVisual {...props} />}>
+      <GltfDroneModel droneScale={props.droneScale} />
+    </Suspense>
+  );
+}
+
+function GltfBeetleModel(): JSX.Element {
+  const gltf = useGLTF(BEETLE_MODEL_URL);
+  const model = useMemo(
+    () => normalizeGltfScene(gltf.scene, 2.2, 0),
+    [gltf.scene]
+  );
+
+  return <primitive object={model} />;
+}
+
+useGLTF.preload(DRONE_MODEL_URL);
+useGLTF.preload(BEETLE_MODEL_URL);
+
+function SceneEffects(): JSX.Element {
+  return (
+    <EffectComposer multisampling={0}>
+      <SMAA />
+      <Bloom mipmapBlur intensity={0.5} luminanceThreshold={0.65} luminanceSmoothing={0.28} />
+    </EffectComposer>
+  );
+}
+
 function SafetyEditorPreview({
   snapshot,
   preview
@@ -1858,7 +1936,7 @@ function SafetyEditorPreview({
         lineWidth={1.5}
       />
       <group position={[0, droneHoverHeight, 0]} rotation={[0, Math.PI * 0.35, 0]}>
-        <DroneVisual
+        <DroneModel
           droneScale={droneScale}
           rotorSpinScale={0.75}
           bodyColor={insideNominalSafetyZone ? "#d7dde1" : "#d4ece4"}
@@ -2278,7 +2356,7 @@ function DroneActor({
 
   return (
     <group ref={groupRef}>
-      <DroneVisual droneScale={droneScale} />
+      <DroneModel droneScale={droneScale} />
     </group>
   );
 }
@@ -2602,53 +2680,51 @@ function BeetleMarker({
             scale
           ]}
         >
-          {/* Striped elytra over a cream body, orange pronotum, dark head: Colorado potato beetle. */}
-          <mesh castShadow>
-            <sphereGeometry args={[1, 12, 12]} />
-            <meshStandardMaterial
-              color={target.alive ? "#e8d9a0" : color}
-              emissive={target.alive ? haloColor : "#1d201d"}
-              emissiveIntensity={target.alive ? 0.16 : 0.08}
-              transparent
-              opacity={animatedOpacity}
-              roughness={0.42}
-            />
-          </mesh>
-          {target.alive
-            ? [-0.62, -0.22, 0.22, 0.62].map((stripeZ) => (
-                <mesh key={stripeZ} position={[0.12, 0.62, stripeZ * 0.6]} rotation={[0, 0, -0.08]}>
-                  <boxGeometry args={[1.3, 0.55, 0.14]} />
-                  <meshStandardMaterial
-                    color="#2b241c"
-                    transparent
-                    opacity={animatedOpacity}
-                    roughness={0.5}
-                  />
-                </mesh>
-              ))
-            : null}
           {target.alive ? (
-            <>
-              <mesh castShadow position={[-0.92, 0.1, 0]} scale={[0.5, 0.62, 0.74]}>
-                <sphereGeometry args={[1, 10, 10]} />
-                <meshStandardMaterial
-                  color="#c97f3d"
-                  transparent
-                  opacity={animatedOpacity}
-                  roughness={0.5}
-                />
-              </mesh>
-              <mesh castShadow position={[-1.32, -0.02, 0]} scale={[0.3, 0.34, 0.4]}>
-                <sphereGeometry args={[1, 8, 8]} />
-                <meshStandardMaterial
-                  color="#33271c"
-                  transparent
-                  opacity={animatedOpacity}
-                  roughness={0.55}
-                />
-              </mesh>
-            </>
-          ) : null}
+            <Suspense
+              fallback={
+                <>
+                  {/* Striped elytra over a cream body, orange pronotum, dark head: Colorado potato beetle. */}
+                  <mesh castShadow>
+                    <sphereGeometry args={[1, 12, 12]} />
+                    <meshStandardMaterial
+                      color="#e8d9a0"
+                      emissive={haloColor}
+                      emissiveIntensity={0.16}
+                      transparent
+                      opacity={animatedOpacity}
+                      roughness={0.42}
+                    />
+                  </mesh>
+                  {[-0.62, -0.22, 0.22, 0.62].map((stripeZ) => (
+                    <mesh key={stripeZ} position={[0.12, 0.62, stripeZ * 0.6]} rotation={[0, 0, -0.08]}>
+                      <boxGeometry args={[1.3, 0.55, 0.14]} />
+                      <meshStandardMaterial
+                        color="#2b241c"
+                        transparent
+                        opacity={animatedOpacity}
+                        roughness={0.5}
+                      />
+                    </mesh>
+                  ))}
+                </>
+              }
+            >
+              <GltfBeetleModel />
+            </Suspense>
+          ) : (
+            <mesh castShadow>
+              <sphereGeometry args={[1, 12, 12]} />
+              <meshStandardMaterial
+                color={color}
+                emissive="#1d201d"
+                emissiveIntensity={0.08}
+                transparent
+                opacity={animatedOpacity}
+                roughness={0.42}
+              />
+            </mesh>
+          )}
         </group>
       )}
       {showMarker ? (
@@ -2882,6 +2958,7 @@ function SceneContents({
         enabled={exposeVisualTestState}
         effectiveCameraMode={effectiveCameraMode}
       />
+      <SceneEffects />
     </>
   );
 }
@@ -2978,7 +3055,7 @@ export function SimulationScene({
       ) : null}
 
       <Canvas
-        shadows
+        shadows="soft"
         dpr={canvasDpr}
         camera={{ position: [8, 7, 9], fov: 42, near: 0.01, far: 200 }}
         gl={{ antialias: !useDenseTargetRendering }}

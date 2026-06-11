@@ -39,6 +39,12 @@ npm run test:visual
 - React 18 + TypeScript
 - Vite
 - Three.js with `@react-three/fiber` and `@react-three/drei`
+- Post-processing (bloom, SMAA) via `@react-three/postprocessing`
+
+## Third-party 3D assets
+
+- `public/models/drone.glb` — "Drone" by NateGazzard via [Poly Pizza](https://poly.pizza/m/DNbUoMtG3H), licensed [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/).
+- `public/models/beetle.glb` — "Beetle" by Poly by Google via [Poly Pizza](https://poly.pizza/m/4yufxgZ1QQ2), licensed [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/).
 
 ## Project structure
 

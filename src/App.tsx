@@ -59,7 +59,7 @@ const FARMER_SAFETY_TOAST_COOLDOWN_MS = 90_000;
 const FARMER_SAFETY_TOAST_AUTO_DISMISS_MS = 12_000;
 const BUILD_TOAST_DELAY_S = 240;
 // Showcase mode: self-running landing-page presentation.
-const SHOWCASE_PLAYBACK_SPEED = 40;
+const SHOWCASE_PLAYBACK_SPEED = 2;
 const SHOWCASE_RESTART_DELAY_MS = 9_000;
 
 type OverlayScreen =

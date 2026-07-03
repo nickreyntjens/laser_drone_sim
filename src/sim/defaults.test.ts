@@ -27,7 +27,7 @@ describe("default playback speeds", () => {
     expect(defaultParameters.safetyStartingApertureMm).toBeCloseTo(10, 6);
   });
 
-  it("defaults to 2 farmers per hectare in the field model", () => {
-    expect(defaultParameters.farmersPerHectare).toBeCloseTo(2, 6);
+  it("defaults to no farmers so cost-per-hectare is not distorted by safety holds", () => {
+    expect(defaultParameters.farmersPerHectare).toBe(0);
   });
 });

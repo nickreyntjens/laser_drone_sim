@@ -13,7 +13,7 @@ export const defaultParameters: SimulationParameters = {
   showOnlySelectedTargetMarkers: true,
   edgeDensityPerHectare: 400,
   gradientStrength: 9,
-  farmersPerHectare: 2,
+  farmersPerHectare: 0,
   safetyFocalDistanceM: 0.5,
   safetyStartingApertureMm: 10,
   batteryCapacityWh: 140,

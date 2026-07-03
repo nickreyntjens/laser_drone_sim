@@ -11,3 +11,4 @@ coverage/
 
 .vite/
 .vitest/
+scripts/out/

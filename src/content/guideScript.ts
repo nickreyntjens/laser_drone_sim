@@ -60,7 +60,7 @@ export function buildGuideIntroLines(
     visibleTargetsLine(params.fieldType),
     selectedTargetLine(params.fieldType),
     "The desktop version is preferred because the simulation is dense. The mobile version is available, but it necessarily shows less at once.",
-    "If you want to remove the farmers from the scene, open the menu, go to Setup, and set farmers per hectare to zero.",
+    "Farmers are kept out of the scene by default so cost measurements stay clean. To add them and see the laser safety holds, open the menu, go to Setup, and raise farmers per hectare.",
     "After each successful shot, the next target is selected automatically and the route continues without manual input.",
     `Watch the energy budget. When the battery approaches the return requirement plus the ${params.reserveBatteryPct}% reserve, the drone goes back to dock, recharges, and then resumes the remaining mission.`,
     "Use the Setup section in the menu to change pest pressure, field dimensions, optics, battery size, and flight limits. The telemetry and report panels show whether the mission still closes realistically."

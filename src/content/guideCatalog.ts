@@ -55,7 +55,7 @@ export const GUIDE_LINE_DEFINITIONS: GuideLineDefinition[] = [
   { id: "intro-visible-targets", category: "visualContext", title: "Visible target dots" },
   { id: "intro-selected-target", category: "visualContext", title: "Selected target marker" },
   { id: "intro-desktop", category: "visualContext", title: "Desktop preferred note" },
-  { id: "intro-farmers-setting", category: "events", title: "Remove farmers in Setup" },
+  { id: "intro-farmers-setting", category: "events", title: "Add farmers in Setup" },
   { id: "intro-next-target", category: "events", title: "Automatic next-target flow" },
   { id: "intro-energy-budget", category: "events", title: "Battery and recharge logic" },
   { id: "intro-setup", category: "events", title: "Setup and telemetry location" },

@@ -56,7 +56,7 @@ export interface ScenarioExportPayload {
   scenario: SavedScenario;
 }
 
-export const PERSISTENT_APP_STATE_STORAGE_KEY = "laser-drone-sim:persistent-state:v1";
+export const PERSISTENT_APP_STATE_STORAGE_KEY = "laser-drone-sim:persistent-state:v2";
 export const SAVED_SCENARIOS_STORAGE_KEY = "laser-drone-sim:scenarios:v1";
 
 const SIMULATION_SECTION_KEYS: Record<Exclude<ScenarioSectionId, "aiming">, Array<keyof SimulationParameters>> = {

@@ -38,7 +38,27 @@ export interface SimulationParameters {
   batteryCapacityWh: number;
   batteryCycleLife: number;
   batteryReplacementCostUsd: number;
+  /** Visual reference mass for rendering the drone model. True all-up flight
+   * mass used by the physics is derived from airframeBaseMassKg + battery mass. */
   droneMassKg: number;
+  /** Airframe + motors + laser + avionics mass, excluding the battery (kg). */
+  airframeBaseMassKg: number;
+  /** Pack-level battery specific energy (Wh/kg); sets the battery's contribution to flight mass. */
+  batterySpecificEnergyWhPerKg: number;
+  /** Wall-to-battery charging efficiency (0-1); electricity drawn = energy / chargerEfficiency. */
+  chargerEfficiency: number;
+  /** Airframe capital cost and its amortization horizon in flight hours. */
+  airframeCostUsd: number;
+  airframeLifeHours: number;
+  /** Laser + optics + steering capital cost and its (longer) amortization horizon in flight hours. */
+  laserCostUsd: number;
+  laserLifeHours: number;
+  /** Flat maintenance/parts allowance per flight hour (USD). */
+  maintenanceCostPerFlightHourUsd: number;
+  /** Optional neonicotinoid perimeter treatment that intercepts a fraction of invading beetles. */
+  neonicBorderEnabled: boolean;
+  borderInterceptionFraction: number;
+  neonicBorderCostPerHectareUsd: number;
   cruiseSpeedMps: number;
   effectiveDragAreaM2: number;
   laserPowerW: number;
@@ -156,8 +176,11 @@ export interface MissionMetrics {
   beetlesRemaining: number;
   averageTimePerTargetS: number;
   energyPerBeetleWh: number;
+  flightTimeS: number;
   batteryDepreciationCostUsd: number;
   energyCostUsd: number;
+  amortizationCostUsd: number;
+  borderCostUsd: number;
   costPerHectareUsd: number;
   equivalentFullCyclesUsed: number;
   energyFractions: {
@@ -171,6 +194,7 @@ export interface MissionMetrics {
 
 export interface MissionSummary {
   totalMissionTimeS: number;
+  flightTimeS: number;
   totalEnergyWh: number;
   rechargeCycles: number;
   beetlesNeutralized: number;
@@ -178,6 +202,8 @@ export interface MissionSummary {
   energyPerBeetleWh: number;
   batteryDepreciationCostUsd: number;
   energyCostUsd: number;
+  amortizationCostUsd: number;
+  borderCostUsd: number;
   costPerHectareUsd: number;
   equivalentFullCyclesUsed: number;
   energyBreakdown: EnergyBreakdown;

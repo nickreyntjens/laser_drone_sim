@@ -19,19 +19,29 @@ const MAX_STEPS = (200 * 3600) / STEP_S;
 
 interface SweepPoint {
   pressure: number;
+  border: boolean;
   costPerHa: number;
-  missionTimeS: number;
-  totalEnergyWh: number;
+  // per-hectare cost components (sum to costPerHa)
+  amortizationPerHa: number;
+  batteryPerHa: number;
+  electricityPerHa: number;
+  borderPerHa: number;
+  flightHours: number;
+  missionHours: number;
   targets: number;
   neutralized: number;
   rechargeCycles: number;
 }
 
-function runMission(pressure: number): SweepPoint {
+const FIELD_HA =
+  (defaultParameters.fieldLengthM * defaultParameters.fieldWidthM) / 10_000;
+
+function runMission(pressure: number, border: boolean): SweepPoint {
   const params = {
     ...defaultParameters,
     edgeDensityPerHectare: pressure,
-    farmersPerHectare: 0
+    farmersPerHectare: 0,
+    neonicBorderEnabled: border
   };
   const engine = new MissionEngine(params, DEFAULT_SEED);
   const targets = engine.targets.length;
@@ -49,18 +59,24 @@ function runMission(pressure: number): SweepPoint {
 
   if (!engine.summary) {
     throw new Error(
-      `Mission did not complete at pressure=${pressure} within ${MAX_STEPS} steps (mode=${engine.drone.mode})`
+      `Mission did not complete at pressure=${pressure} (border=${border}) within ${MAX_STEPS} steps (mode=${engine.drone.mode})`
     );
   }
 
+  const s = engine.summary;
   return {
     pressure,
-    costPerHa: engine.summary.costPerHectareUsd,
-    missionTimeS: engine.summary.totalMissionTimeS,
-    totalEnergyWh: engine.summary.totalEnergyWh,
+    border,
+    costPerHa: s.costPerHectareUsd,
+    amortizationPerHa: s.amortizationCostUsd / FIELD_HA,
+    batteryPerHa: s.batteryDepreciationCostUsd / FIELD_HA,
+    electricityPerHa: s.energyCostUsd / FIELD_HA,
+    borderPerHa: s.borderCostUsd / FIELD_HA,
+    flightHours: s.flightTimeS / 3600,
+    missionHours: s.totalMissionTimeS / 3600,
     targets,
-    neutralized: engine.summary.beetlesNeutralized,
-    rechargeCycles: engine.summary.rechargeCycles
+    neutralized: s.beetlesNeutralized,
+    rechargeCycles: s.rechargeCycles
   };
 }
 
@@ -72,14 +88,19 @@ const pressures =
 
 const points: SweepPoint[] = [];
 for (const pressure of pressures) {
-  const startedAt = Date.now();
-  const point = runMission(pressure);
-  points.push(point);
-  console.error(
-    `pressure=${pressure} cost/ha=$${point.costPerHa.toFixed(2)} ` +
-      `targets=${point.targets} missionTime=${(point.missionTimeS / 3600).toFixed(2)}h ` +
-      `recharges=${point.rechargeCycles} (wall ${(Date.now() - startedAt) / 1000}s)`
-  );
+  for (const border of [false, true]) {
+    const startedAt = Date.now();
+    const point = runMission(pressure, border);
+    points.push(point);
+    console.error(
+      `pressure=${pressure}${border ? " +border" : "        "} ` +
+        `cost/ha=$${point.costPerHa.toFixed(3)} ` +
+        `(amort $${point.amortizationPerHa.toFixed(3)} · batt $${point.batteryPerHa.toFixed(3)} · ` +
+        `elec $${point.electricityPerHa.toFixed(3)} · border $${point.borderPerHa.toFixed(2)}) ` +
+        `flight=${point.flightHours.toFixed(2)}h recharges=${point.rechargeCycles} ` +
+        `(wall ${((Date.now() - startedAt) / 1000).toFixed(1)}s)`
+    );
+  }
 }
 
 const output = {
@@ -88,8 +109,25 @@ const output = {
     farmersPerHectare: 0,
     fieldLengthM: defaultParameters.fieldLengthM,
     fieldWidthM: defaultParameters.fieldWidthM,
+    fieldHa: FIELD_HA,
     fieldType: defaultParameters.fieldType,
-    stepS: STEP_S
+    stepS: STEP_S,
+    costModel: {
+      flightMassKg:
+        defaultParameters.airframeBaseMassKg +
+        defaultParameters.batteryCapacityWh / defaultParameters.batterySpecificEnergyWhPerKg,
+      airframeCostUsd: defaultParameters.airframeCostUsd,
+      airframeLifeHours: defaultParameters.airframeLifeHours,
+      laserCostUsd: defaultParameters.laserCostUsd,
+      laserLifeHours: defaultParameters.laserLifeHours,
+      maintenanceCostPerFlightHourUsd: defaultParameters.maintenanceCostPerFlightHourUsd,
+      batteryCycleLife: defaultParameters.batteryCycleLife,
+      batteryReplacementCostUsd: defaultParameters.batteryReplacementCostUsd,
+      chargerEfficiency: defaultParameters.chargerEfficiency,
+      electricityUsdPerKwh: 0.15,
+      borderInterceptionFraction: defaultParameters.borderInterceptionFraction,
+      neonicBorderCostPerHectareUsd: defaultParameters.neonicBorderCostPerHectareUsd
+    }
   },
   points
 };

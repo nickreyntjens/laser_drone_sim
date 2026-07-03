@@ -87,6 +87,11 @@ function createTestParams(overrides: Partial<SimulationParameters> = {}): Simula
     farmersPerHectare: 0,
     batteryCapacityWh: 320,
     droneMassKg: 6.4,
+    // Physics uses flightMassKg = airframeBaseMassKg + battery mass. Pin the flight
+    // mass to the intended 6.4 kg (negligible battery mass) so the tuned energy /
+    // recharge choreography in these tests is unaffected by the derived-mass model.
+    airframeBaseMassKg: 6.4,
+    batterySpecificEnergyWhPerKg: 1e9,
     cruiseSpeedMps: 4.2,
     effectiveDragAreaM2: 0.08,
     laserPowerW: 180,

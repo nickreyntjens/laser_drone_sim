@@ -205,7 +205,13 @@ export function generateTargets(
   const fieldProfile = getFieldProfile(params.fieldType);
   const fieldArea = params.fieldLengthM * params.fieldWidthM;
   const fieldAreaHectares = fieldArea / 10_000;
-  const targetCountMean = params.edgeDensityPerHectare * fieldAreaHectares;
+  // A neonicotinoid perimeter treatment intercepts a fraction of invading beetles
+  // at the field edge, so fewer reach the crop for the drone to hunt.
+  const borderPassThrough = params.neonicBorderEnabled
+    ? Math.max(0, 1 - params.borderInterceptionFraction)
+    : 1;
+  const targetCountMean =
+    params.edgeDensityPerHectare * fieldAreaHectares * borderPassThrough;
   const targetCount = samplePoisson(targetCountMean, rng);
   const rowCount = Math.max(1, Math.round(params.fieldWidthM / params.rowSpacingM));
   const accepted: TargetState[] = [];

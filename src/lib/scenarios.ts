@@ -71,10 +71,15 @@ const SIMULATION_SECTION_KEYS: Record<Exclude<ScenarioSectionId, "aiming">, Arra
     "laneSpacingM",
     "detectionRadiusM",
     "searchAltitudeM",
-    "engageAltitudeM"
+    "engageAltitudeM",
+    "neonicBorderEnabled",
+    "borderInterceptionFraction",
+    "neonicBorderCostPerHectareUsd"
   ],
   drone: [
     "droneMassKg",
+    "airframeBaseMassKg",
+    "batterySpecificEnergyWhPerKg",
     "cruiseSpeedMps",
     "effectiveDragAreaM2",
     "maxHorizontalAccelMps2",
@@ -97,7 +102,13 @@ const SIMULATION_SECTION_KEYS: Record<Exclude<ScenarioSectionId, "aiming">, Arra
     "batteryCycleLife",
     "batteryReplacementCostUsd",
     "reserveBatteryPct",
-    "rechargeTimeMin"
+    "rechargeTimeMin",
+    "chargerEfficiency",
+    "airframeCostUsd",
+    "airframeLifeHours",
+    "laserCostUsd",
+    "laserLifeHours",
+    "maintenanceCostPerFlightHourUsd"
   ],
   mission: [
     "targetingMode",

@@ -168,20 +168,55 @@ function calculateBatteryDepreciationCostUsd(
   );
 }
 
-function calculateEnergyCostUsd(totalEnergyWh: number): number {
-  return (totalEnergyWh / 1000) * ELECTRICITY_USD_PER_KWH;
+function calculateEnergyCostUsd(
+  totalEnergyWh: number,
+  params: SimulationParameters
+): number {
+  // Electricity billed at the wall: on-board energy divided by charger efficiency.
+  const wallEnergyWh = totalEnergyWh / Math.max(params.chargerEfficiency, 0.1);
+  return (wallEnergyWh / 1000) * ELECTRICITY_USD_PER_KWH;
+}
+
+function calculateAmortizationCostUsd(
+  flightTimeS: number,
+  params: SimulationParameters
+): number {
+  const flightHours = flightTimeS / 3600;
+  const perFlightHourUsd =
+    params.airframeCostUsd / Math.max(params.airframeLifeHours, 1) +
+    params.laserCostUsd / Math.max(params.laserLifeHours, 1) +
+    params.maintenanceCostPerFlightHourUsd;
+  return flightHours * perFlightHourUsd;
+}
+
+function calculateBorderCostUsd(params: SimulationParameters): number {
+  if (!params.neonicBorderEnabled) {
+    return 0;
+  }
+  const fieldAreaHectares = (params.fieldLengthM * params.fieldWidthM) / 10_000;
+  return params.neonicBorderCostPerHectareUsd * fieldAreaHectares;
 }
 
 function calculateCostPerHectareUsd(
   totalEnergyWh: number,
+  flightTimeS: number,
   params: SimulationParameters
 ): number {
   const fieldAreaHectares =
     (params.fieldLengthM * params.fieldWidthM) / 10_000;
-  const consumableCostUsd =
+  const totalCostUsd =
     calculateBatteryDepreciationCostUsd(totalEnergyWh, params) +
-    calculateEnergyCostUsd(totalEnergyWh);
-  return consumableCostUsd / Math.max(fieldAreaHectares, 1e-6);
+    calculateEnergyCostUsd(totalEnergyWh, params) +
+    calculateAmortizationCostUsd(flightTimeS, params) +
+    calculateBorderCostUsd(params);
+  return totalCostUsd / Math.max(fieldAreaHectares, 1e-6);
+}
+
+/** True all-up flight mass: airframe + battery weight derived from pack specific energy. */
+function flightMassKg(params: SimulationParameters): number {
+  const batteryMassKg =
+    params.batteryCapacityWh / Math.max(params.batterySpecificEnergyWhPerKg, 1);
+  return params.airframeBaseMassKg + batteryMassKg;
 }
 
 function isFlightMode(mode: DroneMode): boolean {
@@ -189,7 +224,7 @@ function isFlightMode(mode: DroneMode): boolean {
 }
 
 function calculateHoverPowerW(params: SimulationParameters): number {
-  const thrust = params.droneMassKg * GRAVITY;
+  const thrust = flightMassKg(params) * GRAVITY;
   const idealInduced =
     Math.pow(thrust, 1.5) /
     Math.sqrt(2 * AIR_DENSITY * Math.max(params.rotorDiskAreaM2, 0.1));
@@ -267,6 +302,7 @@ export class MissionEngine {
   public summary: MissionSummary | null;
 
   private missionElapsedS: number;
+  private flightTimeS: number;
 
   private rechargeCycles: number;
 
@@ -331,6 +367,7 @@ export class MissionEngine {
     this.energy = zeroEnergyBreakdown();
     this.summary = null;
     this.missionElapsedS = 0;
+    this.flightTimeS = 0;
     this.rechargeCycles = 0;
     this.neutralizedCount = this.targets.filter((target) => !target.alive).length;
     this.detectedCount = this.targets.filter((target) => target.discovered).length;
@@ -434,6 +471,10 @@ export class MissionEngine {
       return;
     }
 
+    if (isFlightMode(this.drone.mode)) {
+      this.flightTimeS += simDt;
+    }
+
     this.detectTargets();
     this.checkReserveNeed();
     this.selectTargetIfNeeded();
@@ -494,9 +535,12 @@ export class MissionEngine {
         averageTimePerTargetS:
           this.neutralizedCount > 0 ? this.missionElapsedS / this.neutralizedCount : 0,
         energyPerBeetleWh: this.neutralizedCount > 0 ? totalEnergyWh / this.neutralizedCount : 0,
+        flightTimeS: this.flightTimeS,
         batteryDepreciationCostUsd: calculateBatteryDepreciationCostUsd(totalEnergyWh, this.params),
-        energyCostUsd: calculateEnergyCostUsd(totalEnergyWh),
-        costPerHectareUsd: calculateCostPerHectareUsd(totalEnergyWh, this.params),
+        energyCostUsd: calculateEnergyCostUsd(totalEnergyWh, this.params),
+        amortizationCostUsd: calculateAmortizationCostUsd(this.flightTimeS, this.params),
+        borderCostUsd: calculateBorderCostUsd(this.params),
+        costPerHectareUsd: calculateCostPerHectareUsd(totalEnergyWh, this.flightTimeS, this.params),
         equivalentFullCyclesUsed: calculateEquivalentFullCyclesUsed(totalEnergyWh, this.params),
         energyFractions: energyFractions(this.energy)
       },
@@ -1833,15 +1877,16 @@ export class MissionEngine {
     const translationalRelief = 1 - 0.08 * clamp(horizontalSpeed / 7, 0, 1);
     const supportPowerW = hoverPowerW * translationalRelief;
     const dragPowerW = calculateCruiseDragPowerW(this.params, horizontalSpeed);
+    const massKg = flightMassKg(this.params);
     const kineticPower =
-      (this.params.droneMassKg *
+      (massKg *
         Math.max(
           dot(this.drone.acceleration, vec3(this.drone.velocity.x, 0, this.drone.velocity.z)),
           0
         )) /
       Math.max(this.params.propulsionEfficiency, 0.2);
     const brakingPower =
-      (this.params.droneMassKg *
+      (massKg *
         Math.max(
           -dot(this.drone.acceleration, vec3(this.drone.velocity.x, 0, this.drone.velocity.z)),
           0
@@ -1850,9 +1895,9 @@ export class MissionEngine {
       Math.max(this.params.propulsionEfficiency, 0.2);
     const verticalPowerW =
       verticalSpeed >= 0
-        ? (this.params.droneMassKg * GRAVITY * verticalSpeed) /
+        ? (massKg * GRAVITY * verticalSpeed) /
           Math.max(this.params.propulsionEfficiency, 0.2)
-        : (this.params.droneMassKg * GRAVITY * Math.abs(verticalSpeed) * DESCENT_FACTOR) /
+        : (massKg * GRAVITY * Math.abs(verticalSpeed) * DESCENT_FACTOR) /
           Math.max(this.params.propulsionEfficiency, 0.2);
     const maneuverPowerW = kineticPower + brakingPower + Math.abs(verticalPowerW);
     const laserW = this.drone.mode === "firing" ? this.params.laserPowerW : 0;
@@ -2117,6 +2162,7 @@ export class MissionEngine {
     this.drone.instantaneousPowerW = 0;
     this.summary = {
       totalMissionTimeS: this.missionElapsedS,
+      flightTimeS: this.flightTimeS,
       totalEnergyWh,
       rechargeCycles: this.rechargeCycles,
       beetlesNeutralized: this.neutralizedCount,
@@ -2124,8 +2170,10 @@ export class MissionEngine {
         this.neutralizedCount > 0 ? this.missionElapsedS / this.neutralizedCount : 0,
       energyPerBeetleWh: this.neutralizedCount > 0 ? totalEnergyWh / this.neutralizedCount : 0,
       batteryDepreciationCostUsd: calculateBatteryDepreciationCostUsd(totalEnergyWh, this.params),
-      energyCostUsd: calculateEnergyCostUsd(totalEnergyWh),
-      costPerHectareUsd: calculateCostPerHectareUsd(totalEnergyWh, this.params),
+      energyCostUsd: calculateEnergyCostUsd(totalEnergyWh, this.params),
+      amortizationCostUsd: calculateAmortizationCostUsd(this.flightTimeS, this.params),
+      borderCostUsd: calculateBorderCostUsd(this.params),
+      costPerHectareUsd: calculateCostPerHectareUsd(totalEnergyWh, this.flightTimeS, this.params),
       equivalentFullCyclesUsed: calculateEquivalentFullCyclesUsed(totalEnergyWh, this.params),
       energyBreakdown: { ...this.energy },
       energyFractions: energyFractions(this.energy)

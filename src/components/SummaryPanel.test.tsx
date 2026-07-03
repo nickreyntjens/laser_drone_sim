@@ -6,6 +6,7 @@ import { SummaryPanel } from "./SummaryPanel";
 function createSummary(): MissionSummary {
   return {
     totalMissionTimeS: 5400,
+    flightTimeS: 5400,
     totalEnergyWh: 4200,
     rechargeCycles: 28,
     beetlesNeutralized: 38000,
@@ -13,6 +14,8 @@ function createSummary(): MissionSummary {
     energyPerBeetleWh: 0.11,
     batteryDepreciationCostUsd: 9,
     energyCostUsd: 0.63,
+    amortizationCostUsd: 4.2,
+    borderCostUsd: 0,
     costPerHectareUsd: 0.0963,
     equivalentFullCyclesUsed: 30,
     energyBreakdown: {

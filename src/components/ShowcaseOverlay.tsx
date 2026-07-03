@@ -42,11 +42,28 @@ export function ShowcaseOverlay({
   const hasData = snapshot.metrics.totalEnergyWh > 0;
   const fieldAreaHectares =
     (snapshot.params.fieldLengthM * snapshot.params.fieldWidthM) / 10_000;
+  const mode = snapshot.drone.mode;
+  const chargeState =
+    mode === "charging" ? "charging" : mode === "returning" ? "returning" : null;
   const statusLabel = isIntroActive
     ? "Surveying the field"
     : safetyHold
       ? "Paused — person in safety zone"
-      : MODE_LABELS[snapshot.drone.mode];
+      : chargeState === "returning"
+        ? "Low battery — returning to charging station"
+        : chargeState === "charging"
+          ? "Recharging at station"
+          : MODE_LABELS[mode];
+
+  const batteryPct = Math.max(0, Math.min(1, snapshot.drone.batteryPct));
+  const batteryLevel =
+    chargeState === "charging"
+      ? "charging"
+      : batteryPct <= 0.16
+        ? "low"
+        : batteryPct <= 0.3
+          ? "warn"
+          : "ok";
 
   return (
     <div className="showcase-overlay">
@@ -79,11 +96,23 @@ export function ShowcaseOverlay({
         </span>
       </div>
 
+      <div className="showcase-battery" data-level={batteryLevel}>
+        <span className="showcase-battery-track">
+          <span className="showcase-battery-fill" style={{ width: `${batteryPct * 100}%` }} />
+        </span>
+        <span className="showcase-battery-pct">{Math.round(batteryPct * 100)}%</span>
+        {chargeState ? (
+          <span className="showcase-battery-note">
+            {chargeState === "charging" ? "⚡ Recharging" : "↩ To charging station"}
+          </span>
+        ) : null}
+      </div>
+
       <div className="showcase-status">
         <span>{formatDuration(snapshot.metrics.missionElapsedS)} mission time</span>
         <span>{snapshot.metrics.beetlesNeutralized.toLocaleString("en-US")} neutralized</span>
         <span>{formatEnergy(snapshot.metrics.totalEnergyWh)}</span>
-        <span className={safetyHold ? "showcase-status-safety" : undefined}>{statusLabel}</span>
+        <span className={safetyHold || chargeState ? "showcase-status-safety" : undefined}>{statusLabel}</span>
       </div>
 
       <button type="button" className="showcase-explore" onClick={onExplore}>

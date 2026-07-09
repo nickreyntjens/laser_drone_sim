@@ -1147,8 +1147,8 @@ export function runAimingSimulation(params: AimingLabParameters): AimingSimulati
         sumOpticalYMrad: 0,
         startPointingYMrad: pointingErrorYMrad,
         endPointingYMrad: pointingErrorYMrad,
-        sumMirrorPitchMrad: mirrorPitchMrad,
-        sumMirrorRollMrad: mirrorRollMrad,
+        sumMirrorPitchMrad: 0,
+        sumMirrorRollMrad: 0,
         pathPoints: [],
         mirrorAngleBeforeMrad: mirrorAngleMrad
       };
@@ -1710,8 +1710,8 @@ export class AimingLabEngine {
         sumOpticalYMrad: 0,
         startPointingYMrad: pointingErrorYMrad,
         endPointingYMrad: pointingErrorYMrad,
-        sumMirrorPitchMrad: mirrorPitchMrad,
-        sumMirrorRollMrad: mirrorRollMrad,
+        sumMirrorPitchMrad: 0,
+        sumMirrorRollMrad: 0,
         pathPoints: [],
         mirrorAngleBeforeMrad: this.mirrorAngleMrad
       };

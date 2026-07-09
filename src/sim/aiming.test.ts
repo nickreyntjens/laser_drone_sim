@@ -448,3 +448,30 @@ describe("AimingLabEngine", () => {
     expect(Math.abs(snapshot.currentSample.opticalTargetAngleMrad)).toBeLessThan(1e-9);
   });
 });
+
+describe("measurement reconstruction", () => {
+  it("converges the mirror to a clean step without steady-state bias, even at short exposures", () => {
+    // Regression: the exposure's mirror centroid was seeded with one extra sample,
+    // over-counting the mirror by (n+1)/n and making the loop settle at up to 2x the
+    // target for short exposures (few samples per exposure).
+    for (const exposureTimeMs of [0.5, 1.6]) {
+      const result = runAimingSimulation({
+        ...defaultAimingLabParameters,
+        exposureTimeMs,
+        durationS: 3,
+        targetStepTimeS: 0.5,
+        targetStepMrad: 0.7,
+        targetSwayMrad: 0,
+        lowFrequencyDisturbanceMrad: 0,
+        highFrequencyDisturbanceMrad: 0,
+        pixelNoisePx: 0,
+        imuFeedforwardGain: 0,
+        imuRateLeadGain: 0
+      });
+      const tail = result.samples.filter((sample) => sample.timeS > 2.5);
+      const meanMirror = tail.reduce((sum, sample) => sum + sample.mirrorAngleMrad, 0) / tail.length;
+      expect(meanMirror).toBeGreaterThan(0.6);
+      expect(meanMirror).toBeLessThan(0.8);
+    }
+  });
+});

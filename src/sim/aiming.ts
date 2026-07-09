@@ -45,11 +45,16 @@ export interface AimingLabParameters {
   targetStepTimeS: number;
   targetSwayMrad: number;
   targetSwayHz: number;
+  targetPathMode: "sway" | "walk";
+  targetWalkSpeedMradPerS: number;
+  targetWalkTurnHz: number;
+  targetRecenterTauS: number;
   targetBiasXMrad: number;
   targetBiasYMrad: number;
   mirrorPitchBiasMrad: number;
   mirrorRollBiasMrad: number;
   lockThresholdMrad: number;
+  targetDiameterMm: number;
   targetMassMg: number;
   targetSpecificHeatJPerKgC: number;
   targetHeatLossWPerC: number;
@@ -68,6 +73,7 @@ export interface AimingSample {
   highFrequencyDisturbanceMrad: number;
   residualPlatformMotionMrad: number;
   targetMotionMrad: number;
+  targetHeadingRad: number;
   opticalTargetAngleMrad: number;
   opticalTargetAngleYMrad: number;
   measuredErrorMrad: number;
@@ -263,7 +269,7 @@ interface LaserThermalUpdate {
 export const AIMING_SENSOR_WIDTH_MM = 6.4;
 export const AIMING_SENSOR_HEIGHT_MM = 3.6;
 
-const TARGET_DIAMETER_MM = 0.28;
+const TARGET_DIAMETER_MM = 0.28; // default target (see params.targetDiameterMm)
 const AMBIENT_TEMPERATURE_C = 22;
 const COVERAGE_TIME_CONSTANT_S = 0.04;
 const LASER_ENGAGE_TREND_PER_S = 0;
@@ -403,11 +409,16 @@ export const defaultAimingLabParameters: AimingLabParameters = {
   targetStepTimeS: 0.8,
   targetSwayMrad: 0.08,
   targetSwayHz: 1.4,
+  targetPathMode: "sway",
+  targetWalkSpeedMradPerS: 5,
+  targetWalkTurnHz: 0.11,
+  targetRecenterTauS: 4,
   targetBiasXMrad: 0,
   targetBiasYMrad: 0,
   mirrorPitchBiasMrad: 0,
   mirrorRollBiasMrad: 0,
   lockThresholdMrad: 0.08,
+  targetDiameterMm: 0.28,
   targetMassMg: 8,
   targetSpecificHeatJPerKgC: 3600,
   targetHeatLossWPerC: 0.04,
@@ -468,7 +479,7 @@ function updateLaserThermalState(
   const sensorYMm = pointingErrorYMrad * sensorScaleMmPerMrad;
   const distanceMm = Math.hypot(sensorXMm, sensorYMm);
   const laserRadiusMm = Math.max(params.laserSpotDiameterMm * 0.5, 1e-6);
-  const targetRadiusMm = TARGET_DIAMETER_MM * 0.5;
+  const targetRadiusMm = Math.max(params.targetDiameterMm, 1e-3) * 0.5;
   const targetInSpot = distanceMm <= laserRadiusMm;
   const nextCoverageRatio = clamp(
     state.coverageRatio +
@@ -593,6 +604,41 @@ export function computeAimingDiagramState(
 function noiseSignal(seed: number): number {
   const value = Math.sin(seed * 12.9898 + 78.233) * 43758.5453;
   return value - Math.floor(value);
+}
+
+interface TargetPathState {
+  xMrad: number;
+  yMrad: number;
+  headingRad: number;
+}
+
+function createTargetPathState(): TargetPathState {
+  return { xMrad: 0, yMrad: 0, headingRad: 0 };
+}
+
+// Deterministic beetle-style walk: a smoothly turning heading integrated at constant
+// speed, plus a slow pull back toward boresight modelling the drone / coarse gimbal
+// re-centering on the target while the fine stage tracks. Time-based heading keeps
+// runs reproducible (no RNG state).
+function advanceTargetPath(
+  state: TargetPathState,
+  params: AimingLabParameters,
+  timeS: number,
+  dtS: number
+): void {
+  if (params.targetPathMode !== "walk") {
+    return;
+  }
+  const turnHz = Math.max(params.targetWalkTurnHz, 0.005);
+  const phaseA = noiseSignal(11.3) * Math.PI * 2;
+  const phaseB = noiseSignal(47.9) * Math.PI * 2;
+  state.headingRad =
+    Math.PI *
+    (Math.sin(timeS * turnHz * Math.PI * 2 + phaseA) +
+      0.6 * Math.sin(timeS * turnHz * 2.7 * Math.PI * 2 + phaseB));
+  const recenterTauS = Math.max(params.targetRecenterTauS, 0.2);
+  state.xMrad += (Math.cos(state.headingRad) * params.targetWalkSpeedMradPerS - state.xMrad / recenterTauS) * dtS;
+  state.yMrad += (Math.sin(state.headingRad) * params.targetWalkSpeedMradPerS - state.yMrad / recenterTauS) * dtS;
 }
 
 function lowPassStep(current: number, target: number, cutoffHz: number, dtS: number): number {
@@ -1072,9 +1118,11 @@ export function runAimingSimulation(params: AimingLabParameters): AimingSimulati
   let lastShotTimeS = -Infinity;
   const controllerState = createPredictiveControllerState();
   let controllerCycleIndex = -1;
+  const targetPath = createTargetPathState();
 
   for (let index = 0; index < sampleCount; index += 1) {
     const timeS = index * params.timeStepS;
+    advanceTargetPath(targetPath, params, timeS, params.timeStepS);
     const lowFrequencyDisturbanceMrad =
       lowFrequencyGain * params.lowFrequencyDisturbanceMrad * Math.sin(timeS * params.lowFrequencyHz * Math.PI * 2);
     const highFrequencyDisturbanceMrad =
@@ -1086,7 +1134,8 @@ export function runAimingSimulation(params: AimingLabParameters): AimingSimulati
     const targetMotionMrad =
       (timeS >= params.targetStepTimeS ? params.targetStepMrad : 0) +
       params.targetSwayMrad * Math.sin(timeS * params.targetSwayHz * Math.PI * 2) +
-      params.targetBiasXMrad;
+      params.targetBiasXMrad +
+      targetPath.xMrad;
     const residualPlatformMotionYMrad =
       0.38 * lowFrequencyDisturbanceMrad * Math.sin(timeS * params.lowFrequencyHz * Math.PI * 1.2) +
       0.22 * highFrequencyDisturbanceMrad * Math.cos(timeS * params.highFrequencyHz * Math.PI * 1.1);
@@ -1094,7 +1143,8 @@ export function runAimingSimulation(params: AimingLabParameters): AimingSimulati
     const opticalTargetAngleYMrad =
       residualPlatformMotionYMrad +
       params.targetBiasYMrad +
-      params.targetSwayMrad * 0.55 * Math.cos(timeS * params.targetSwayHz * Math.PI * 1.3);
+      params.targetSwayMrad * 0.55 * Math.cos(timeS * params.targetSwayHz * Math.PI * 1.3) +
+      targetPath.yMrad;
     const mirrorPitchMrad = mirrorAngleMrad + params.mirrorPitchBiasMrad;
     const mirrorRollMrad = mirrorRollAngleMrad + params.mirrorRollBiasMrad;
     const pointingErrorMrad = opticalTargetAngleMrad - opticalFromMirrorAngle(mirrorPitchMrad);
@@ -1325,6 +1375,7 @@ export function runAimingSimulation(params: AimingLabParameters): AimingSimulati
       highFrequencyDisturbanceMrad,
       residualPlatformMotionMrad,
       targetMotionMrad,
+      targetHeadingRad: targetPath.headingRad,
       opticalTargetAngleMrad,
       opticalTargetAngleYMrad,
       measuredErrorMrad: latestMeasuredErrorMrad,
@@ -1388,6 +1439,7 @@ function createZeroSample(): AimingSample {
     highFrequencyDisturbanceMrad: 0,
     residualPlatformMotionMrad: 0,
     targetMotionMrad: 0,
+    targetHeadingRad: 0,
     opticalTargetAngleMrad: 0,
     opticalTargetAngleYMrad: 0,
     measuredErrorMrad: 0,
@@ -1499,6 +1551,7 @@ export class AimingLabEngine {
 
   private controllerState = createPredictiveControllerState();
   private controllerCycleIndex = -1;
+  private targetPath = createTargetPathState();
   private mirrorAngleMrad = 0;
   private mirrorRollAngleMrad = 0;
   private mirrorVelocityMradPerS = 0;
@@ -1550,6 +1603,7 @@ export class AimingLabEngine {
     this.lastShotTimeS = -Infinity;
     this.controllerState = createPredictiveControllerState();
     this.controllerCycleIndex = -1;
+    this.targetPath = createTargetPathState();
     this.mirrorAngleMrad = 0;
     this.mirrorRollAngleMrad = 0;
     this.mirrorVelocityMradPerS = 0;
@@ -1645,10 +1699,12 @@ export class AimingLabEngine {
       (0.76 * Math.sin(timeS * this.params.highFrequencyHz * Math.PI * 2) +
         0.24 * Math.sin(timeS * this.params.highFrequencyHz * Math.PI * 3.3));
     const residualPlatformMotionMrad = lowFrequencyDisturbanceMrad + highFrequencyDisturbanceMrad;
+    advanceTargetPath(this.targetPath, this.params, timeS, dtS);
     const targetMotionMrad =
       (timeS >= this.params.targetStepTimeS ? this.params.targetStepMrad : 0) +
       this.params.targetSwayMrad * Math.sin(timeS * this.params.targetSwayHz * Math.PI * 2) +
-      this.params.targetBiasXMrad;
+      this.params.targetBiasXMrad +
+      this.targetPath.xMrad;
     const residualPlatformMotionYMrad =
       0.38 * lowFrequencyDisturbanceMrad * Math.sin(timeS * this.params.lowFrequencyHz * Math.PI * 1.2) +
       0.22 * highFrequencyDisturbanceMrad * Math.cos(timeS * this.params.highFrequencyHz * Math.PI * 1.1);
@@ -1656,7 +1712,8 @@ export class AimingLabEngine {
     const opticalTargetAngleYMrad =
       residualPlatformMotionYMrad +
       this.params.targetBiasYMrad +
-      this.params.targetSwayMrad * 0.55 * Math.cos(timeS * this.params.targetSwayHz * Math.PI * 1.3);
+      this.params.targetSwayMrad * 0.55 * Math.cos(timeS * this.params.targetSwayHz * Math.PI * 1.3) +
+      this.targetPath.yMrad;
     const mirrorPitchMrad = this.mirrorAngleMrad + this.params.mirrorPitchBiasMrad;
     const mirrorRollMrad = this.mirrorRollAngleMrad + this.params.mirrorRollBiasMrad;
     const pointingErrorMrad = opticalTargetAngleMrad - opticalFromMirrorAngle(mirrorPitchMrad);
@@ -1895,6 +1952,7 @@ export class AimingLabEngine {
       highFrequencyDisturbanceMrad,
       residualPlatformMotionMrad,
       targetMotionMrad,
+      targetHeadingRad: this.targetPath.headingRad,
       opticalTargetAngleMrad,
       opticalTargetAngleYMrad,
       measuredErrorMrad: this.latestMeasuredErrorMrad,

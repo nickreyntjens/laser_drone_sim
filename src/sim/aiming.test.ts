@@ -154,6 +154,7 @@ describe("runAimingSimulation", () => {
       highFrequencyDisturbanceMrad: 0,
       residualPlatformMotionMrad: 0,
       targetMotionMrad: 0,
+      targetHeadingRad: 0,
       opticalTargetAngleMrad: 0,
       opticalTargetAngleYMrad: 0,
       measuredErrorMrad: 0,
@@ -188,6 +189,7 @@ describe("runAimingSimulation", () => {
       highFrequencyDisturbanceMrad: 0.03,
       residualPlatformMotionMrad: 0.13,
       targetMotionMrad: 0.5,
+      targetHeadingRad: 0,
       opticalTargetAngleMrad: 0.63,
       opticalTargetAngleYMrad: 0.12,
       measuredErrorMrad: 0.41,
@@ -231,6 +233,7 @@ describe("runAimingSimulation", () => {
       highFrequencyDisturbanceMrad: 0.03,
       residualPlatformMotionMrad: 0.13,
       targetMotionMrad: 0.5,
+      targetHeadingRad: 0,
       opticalTargetAngleMrad: 0.63,
       opticalTargetAngleYMrad: 0.12,
       measuredErrorMrad: 0.41,
@@ -473,5 +476,45 @@ describe("measurement reconstruction", () => {
       expect(meanMirror).toBeGreaterThan(0.6);
       expect(meanMirror).toBeLessThan(0.8);
     }
+  });
+});
+
+describe("walk target path", () => {
+  const walkParams = {
+    ...defaultAimingLabParameters,
+    targetPathMode: "walk" as const,
+    targetWalkSpeedMradPerS: 5,
+    targetStepMrad: 0,
+    targetSwayMrad: 0
+  };
+
+  it("is deterministic across runs", () => {
+    const a = runAimingSimulation(walkParams);
+    const b = runAimingSimulation(walkParams);
+    expect(a.samples[a.samples.length - 1].targetMotionMrad).toBe(
+      b.samples[b.samples.length - 1].targetMotionMrad
+    );
+    expect(a.metrics.rmsPointingErrorMrad).toBe(b.metrics.rmsPointingErrorMrad);
+  });
+
+  it("keeps the walk bounded (drone re-centering) and actually moving", () => {
+    const result = runAimingSimulation(walkParams);
+    const maxTarget = result.samples.reduce(
+      (max, sample) => Math.max(max, Math.abs(sample.targetMotionMrad)),
+      0
+    );
+    // Bounded by roughly speed x recenter tau, and clearly non-static.
+    expect(maxTarget).toBeLessThan(
+      walkParams.targetWalkSpeedMradPerS * walkParams.targetRecenterTauS * 1.5
+    );
+    expect(maxTarget).toBeGreaterThan(0.5);
+    const headings = new Set(result.samples.map((sample) => sample.targetHeadingRad.toFixed(2)));
+    expect(headings.size).toBeGreaterThan(10);
+  });
+
+  it("remains trackable by the closed loop", () => {
+    const closed = runAimingSimulation(walkParams);
+    const open = runAimingSimulation({ ...walkParams, pidKp: 0, pidKi: 0, pidKd: 0 });
+    expect(closed.metrics.rmsPointingErrorMrad).toBeLessThan(open.metrics.rmsPointingErrorMrad);
   });
 });

@@ -10,6 +10,7 @@ import {
   AimingPlaybackPhase,
   defaultAimingLabParameters,
 } from "../sim/aiming";
+import { autoTunePid, type PidTuneProgress } from "../sim/pidTuner";
 
 interface AimingLabPanelProps {
   params: AimingLabParameters;
@@ -124,6 +125,20 @@ function buildFramePath(
     .join(" ");
 }
 
+function roundToSignificantDigits(value: number, digits = 3): number {
+  if (!Number.isFinite(value) || value === 0) {
+    return value;
+  }
+  const scale = 10 ** (digits - Math.ceil(Math.log10(Math.abs(value))));
+  return Math.round(value * scale) / scale;
+}
+
+interface AutoTuneState {
+  running: boolean;
+  progress: PidTuneProgress | null;
+  summary: string | null;
+}
+
 function AimingSlider({
   label,
   value,
@@ -169,6 +184,49 @@ export function AimingLabPanel({
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const engineRef = useRef<AimingLabEngine>(new AimingLabEngine(params));
   const [snapshot, setSnapshot] = useState<AimingLiveSnapshot>(engineRef.current.getSnapshot());
+  const [autoTune, setAutoTune] = useState<AutoTuneState>({
+    running: false,
+    progress: null,
+    summary: null
+  });
+  const autoTuneAbortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => () => autoTuneAbortRef.current?.abort(), []);
+
+  const startAutoTune = async (): Promise<void> => {
+    if (autoTune.running || params.commandGeneratorMode === "direct") {
+      return;
+    }
+    const controller = new AbortController();
+    autoTuneAbortRef.current = controller;
+    setAutoTune({ running: true, progress: null, summary: null });
+    try {
+      const result = await autoTunePid(params, {
+        signal: controller.signal,
+        onProgress: (progress) => setAutoTune((state) => ({ ...state, progress }))
+      });
+      if (result.improved) {
+        onChange({
+          pidKp: roundToSignificantDigits(result.gains.pidKp),
+          pidKi: roundToSignificantDigits(result.gains.pidKi),
+          pidKd: roundToSignificantDigits(result.gains.pidKd)
+        });
+      }
+      const summary = result.improved
+        ? `Tuned: RMS ${result.baselineMetrics.rmsPointingErrorMrad.toFixed(3)} → ${result.metrics.rmsPointingErrorMrad.toFixed(3)} mrad` +
+          (result.aborted ? " (cancelled early — best found applied)" : "")
+        : result.aborted
+          ? "Tuning cancelled — gains unchanged."
+          : "No better gains found — current values kept.";
+      setAutoTune({ running: false, progress: null, summary });
+    } catch (error) {
+      setAutoTune({
+        running: false,
+        progress: null,
+        summary: error instanceof Error ? error.message : "Auto-tune failed."
+      });
+    }
+  };
 
   useEffect(() => {
     engineRef.current.updateParams(params);
@@ -735,6 +793,44 @@ export function AimingLabPanel({
               suffix=" mrad"
               onChange={(value) => onChange({ integralLimitMrad: value })}
             />
+            <AimingSlider
+              label="Derivative filter"
+              value={params.derivativeFilterHz}
+              min={5}
+              max={400}
+              step={5}
+              suffix=" Hz"
+              onChange={(value) => onChange({ derivativeFilterHz: value })}
+            />
+            <div className="aiming-autotune" style={{ display: "grid", gap: "0.35rem" }}>
+              <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+                <button
+                  className="secondary-button"
+                  onClick={() => void startAutoTune()}
+                  disabled={autoTune.running || params.commandGeneratorMode === "direct"}
+                >
+                  {autoTune.running ? "Tuning…" : "Auto-tune PID"}
+                </button>
+                {autoTune.running ? (
+                  <button
+                    className="secondary-button"
+                    onClick={() => autoTuneAbortRef.current?.abort()}
+                  >
+                    Cancel
+                  </button>
+                ) : null}
+              </div>
+              <small>
+                {params.commandGeneratorMode === "direct"
+                  ? "Not available for the direct command generator (it bypasses the PID)."
+                  : autoTune.running
+                    ? autoTune.progress
+                      ? `Searching ${autoTune.progress.evaluationsDone}/${autoTune.progress.maxEvaluations} · best RMS ${autoTune.progress.bestMetrics.rmsPointingErrorMrad.toFixed(3)} mrad`
+                      : "Starting search…"
+                    : autoTune.summary ??
+                      "Searches Kp / Ki / Kd for the lowest tracking error on the current scenario."}
+              </small>
+            </div>
             {params.commandGeneratorMode === "integral" ||
             params.commandGeneratorMode === "frequency_phase" ||
             params.commandGeneratorMode === "dmd_sliding_window" ? (

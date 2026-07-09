@@ -24,6 +24,7 @@ export interface AimingLabParameters {
   pidKi: number;
   pidKd: number;
   integralLimitMrad: number;
+  derivativeFilterHz: number;
   commandGeneratorMode: AimingCommandGeneratorMode;
   predictorLeadMs: number;
   centroidVelocityGain: number;
@@ -225,6 +226,8 @@ interface PredictiveControllerState {
   commandBiasRollMrad: number;
   previousPredictedErrorPitchMrad: number;
   previousPredictedErrorRollMrad: number;
+  filteredDerivativePitchMradPerS: number;
+  filteredDerivativeRollMradPerS: number;
   generatorCommandPitchMrad: number;
   generatorCommandRollMrad: number;
   measurementWindow: Array<{ timeS: number; pitchMrad: number; rollMrad: number }>;
@@ -379,6 +382,7 @@ export const defaultAimingLabParameters: AimingLabParameters = {
   pidKi: 18,
   pidKd: 0.0005,
   integralLimitMrad: 1.4,
+  derivativeFilterHz: 60,
   commandGeneratorMode: "integral",
   predictorLeadMs: 1.5,
   centroidVelocityGain: 0.4,
@@ -615,6 +619,8 @@ function createPredictiveControllerState(): PredictiveControllerState {
     commandBiasRollMrad: 0,
     previousPredictedErrorPitchMrad: 0,
     previousPredictedErrorRollMrad: 0,
+    filteredDerivativePitchMradPerS: 0,
+    filteredDerivativeRollMradPerS: 0,
     generatorCommandPitchMrad: 0,
     generatorCommandRollMrad: 0,
     measurementWindow: [],
@@ -892,10 +898,28 @@ function computePredictiveCommand(
     params.integralLimitMrad
   );
 
-  const derivativePitchMradPerS =
+  const rawDerivativePitchMradPerS =
     (predictedErrorPitchMrad - state.previousPredictedErrorPitchMrad) / Math.max(controllerDtS, 1e-6);
-  const derivativeRollMradPerS =
+  const rawDerivativeRollMradPerS =
     (predictedErrorRollMrad - state.previousPredictedErrorRollMrad) / Math.max(controllerDtS, 1e-6);
+
+  // Low-pass the D term: a raw finite difference of the (pixel-noise-contaminated)
+  // predicted error amplifies centroid noise at the controller rate, which made Kd
+  // nearly unusable. Filtering keeps Kd acting as true damping on real error motion.
+  state.filteredDerivativePitchMradPerS = lowPassStep(
+    state.filteredDerivativePitchMradPerS,
+    rawDerivativePitchMradPerS,
+    params.derivativeFilterHz,
+    controllerDtS
+  );
+  state.filteredDerivativeRollMradPerS = lowPassStep(
+    state.filteredDerivativeRollMradPerS,
+    rawDerivativeRollMradPerS,
+    params.derivativeFilterHz,
+    controllerDtS
+  );
+  const derivativePitchMradPerS = state.filteredDerivativePitchMradPerS;
+  const derivativeRollMradPerS = state.filteredDerivativeRollMradPerS;
 
   state.previousPredictedErrorPitchMrad = predictedErrorPitchMrad;
   state.previousPredictedErrorRollMrad = predictedErrorRollMrad;

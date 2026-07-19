@@ -12,6 +12,16 @@ import { fileURLToPath } from "node:url";
 
 import { MissionEngine } from "../src/sim/engine";
 import { DEFAULT_SEED, defaultParameters } from "../src/sim/defaults";
+import {
+  calculateDroneFlightHourCost,
+  FLIGHT_COST_DEFAULTS,
+  priceFlightHoursPerHa,
+} from "../src/economics/flightCostModel";
+
+// The CANONICAL pricing model (same file the website vendors). The engine supplies
+// physics (flight hours); this prices them, so these `priced*` columns are exactly
+// what the website shows — reproducible by running this sweep in this one repo.
+const FC = calculateDroneFlightHourCost(FLIGHT_COST_DEFAULTS);
 
 const STEP_S = 0.05;
 // Generous cap: 200 sim-hours per mission. Missions that exceed it are reported, not silently dropped.
@@ -31,6 +41,15 @@ interface SweepPoint {
   targets: number;
   neutralized: number;
   rechargeCycles: number;
+  // Canonical-model pricing of the SAME flight hours (what the website shows).
+  // Physics columns above come from the engine's energy integral; these come from
+  // flight-hours × flightCostModel rates. They agree to a few % by construction.
+  priced: {
+    amortizationPerHa: number; // capital allocations + maintenance
+    batteryPerHa: number;
+    electricityPerHa: number;
+    fullyAllocatedPerHa: number; // amort + battery + electricity (one sweep)
+  };
 }
 
 const FIELD_HA =
@@ -64,6 +83,8 @@ function runMission(pressure: number, border: boolean): SweepPoint {
   }
 
   const s = engine.summary;
+  const flightHours = s.flightTimeS / 3600;
+  const priced = priceFlightHoursPerHa(flightHours, FIELD_HA, FC);
   return {
     pressure,
     border,
@@ -72,11 +93,17 @@ function runMission(pressure: number, border: boolean): SweepPoint {
     batteryPerHa: s.batteryDepreciationCostUsd / FIELD_HA,
     electricityPerHa: s.energyCostUsd / FIELD_HA,
     borderPerHa: s.borderCostUsd / FIELD_HA,
-    flightHours: s.flightTimeS / 3600,
+    flightHours,
     missionHours: s.totalMissionTimeS / 3600,
     targets,
     neutralized: s.beetlesNeutralized,
-    rechargeCycles: s.rechargeCycles
+    rechargeCycles: s.rechargeCycles,
+    priced: {
+      amortizationPerHa: priced.amortization,
+      batteryPerHa: priced.battery,
+      electricityPerHa: priced.electricity,
+      fullyAllocatedPerHa: priced.amortization + priced.battery + priced.electricity
+    }
   };
 }
 
@@ -97,6 +124,7 @@ for (const pressure of pressures) {
         `cost/ha=$${point.costPerHa.toFixed(3)} ` +
         `(amort $${point.amortizationPerHa.toFixed(3)} · batt $${point.batteryPerHa.toFixed(3)} · ` +
         `elec $${point.electricityPerHa.toFixed(3)} · border $${point.borderPerHa.toFixed(2)}) ` +
+        `priced/ha=$${point.priced.fullyAllocatedPerHa.toFixed(3)} ` +
         `flight=${point.flightHours.toFixed(2)}h recharges=${point.rechargeCycles} ` +
         `(wall ${((Date.now() - startedAt) / 1000).toFixed(1)}s)`
     );
@@ -127,6 +155,14 @@ const output = {
       electricityUsdPerKwh: 0.15,
       borderInterceptionFraction: defaultParameters.borderInterceptionFraction,
       neonicBorderCostPerHectareUsd: defaultParameters.neonicBorderCostPerHectareUsd
+    },
+    // Canonical pricing model (src/economics/flightCostModel.ts) used for the
+    // `priced` columns — the numbers the website displays.
+    flightCostModel: {
+      inputs: FLIGHT_COST_DEFAULTS,
+      marginalPerHour: FC.marginalFlightCostPerHour,
+      ordinaryPerHour: FC.ordinaryDroneCostPerHour,
+      fullyAllocatedPerHour: FC.fullyAllocatedSystemCostPerHour
     }
   },
   points

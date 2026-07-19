@@ -79,7 +79,7 @@ npm run test:visual
 - **Climb/descent**: climb power uses `m * g * vertical_speed / efficiency`. Descent is modeled as a smaller non-regenerative control penalty.
 - **Laser draw**: electrical power is added only during the firing state.
 - **Avionics draw**: constant baseline power during flight states.
-- **Cost per hectare**: battery depreciation only. Equivalent full cycles come from total mission energy throughput divided by pack capacity, then scaled by replacement cost and rated cycle life and normalized by field area.
+- **Cost per hectare**: four components — battery depreciation, charging electricity, flight-dependent maintenance, and capital amortization (airframe + laser over their flight-hour lives). The engine computes these from the physics per mission; the canonical pricing model in [`src/economics/flightCostModel.ts`](src/economics/flightCostModel.ts) re-prices the same flight hours at stated unit costs and agrees to within a few percent. See **[DERIVATION.md](DERIVATION.md)** for the full pressure → flight-hours → $/ha chain with a worked example, and `npm run verify:hopping` to check the flight-time physics against the paper's closed-form hopping model.
 
 ### Beetle spatial distribution
 

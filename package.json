@@ -9,7 +9,9 @@
     "preview": "vite preview",
     "test": "vitest",
     "test:run": "vitest run",
-    "test:visual": "./scripts/run-playwright.sh test"
+    "test:visual": "./scripts/run-playwright.sh test",
+    "cost:sweep": "tsx scripts/costSweep.ts",
+    "verify:hopping": "tsx scripts/verifyHopping.ts"
   },
   "dependencies": {
     "@react-three/drei": "9.88.13",
@@ -27,6 +29,7 @@
     "@types/react-dom": "18.2.18",
     "@types/three": "0.160.0",
     "@vitejs/plugin-react": "4.2.1",
+    "tsx": "^4.23.1",
     "typescript": "5.3.3",
     "vite": "4.5.2",
     "vitest": "0.34.6"

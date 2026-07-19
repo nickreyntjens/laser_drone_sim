@@ -84,8 +84,9 @@ npm run test:visual
 ### Validation against real drone telemetry
 
 The flight-power physics is checked against **measured DJI Matrice 100 battery data**
-(a public 209-flight dataset) — not just internal consistency. The uncalibrated model
-predicts the measured power to ~11 % mean error. Full write-up, extraction, and
+(a public 209-flight dataset) — not just internal consistency. After filtering to
+level, low-acceleration segments and weighting flights equally, the uncalibrated
+model achieves 9.4% flight-level cruise MAPE. Full write-up, extraction, and
 reproduction in **[GROUND_TRUTH.md](GROUND_TRUTH.md)** (`npm run validate:power`).
 
 ### Beetle spatial distribution

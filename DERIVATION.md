@@ -121,6 +121,9 @@ gap). The reference is left untuned on purpose, and `src/sim/power.test.ts` asse
 the model stays within 15 % of the measured values with the correct flat shape. This
 is the one check in the repo that is **not** internally calibrated.
 
+**Full write-up — data source, extraction, model derivation, and reproduction — is
+in [GROUND_TRUTH.md](GROUND_TRUTH.md).**
+
 ## Layer 2 — Pricing: flight hours → $/hectare
 
 **Where:** [`src/economics/flightCostModel.ts`](src/economics/flightCostModel.ts) —

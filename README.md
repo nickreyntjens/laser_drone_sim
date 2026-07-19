@@ -81,6 +81,13 @@ npm run test:visual
 - **Avionics draw**: constant baseline power during flight states.
 - **Cost per hectare**: four components — battery depreciation, charging electricity, flight-dependent maintenance, and capital amortization (airframe + laser over their flight-hour lives). The engine computes these from the physics per mission; the canonical pricing model in [`src/economics/flightCostModel.ts`](src/economics/flightCostModel.ts) re-prices the same flight hours at stated unit costs and agrees to within a few percent. See **[DERIVATION.md](DERIVATION.md)** for the full pressure → flight-hours → $/ha chain with a worked example, and `npm run verify:hopping` to check the flight-time physics against the paper's closed-form hopping model.
 
+### Validation against real drone telemetry
+
+The flight-power physics is checked against **measured DJI Matrice 100 battery data**
+(a public 209-flight dataset) — not just internal consistency. The uncalibrated model
+predicts the measured power to ~11 % mean error. Full write-up, extraction, and
+reproduction in **[GROUND_TRUTH.md](GROUND_TRUTH.md)** (`npm run validate:power`).
+
 ### Beetle spatial distribution
 
 - Beetles are generated with a non-uniform Poisson point process.

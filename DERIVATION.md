@@ -92,6 +92,35 @@ make the paper's estimate an upper bound:
 
 ---
 
+### Validating Layer 1 against REAL telemetry (DJI Matrice 100)
+
+The flight-time and energy physics are checked against measured drone data, not just
+an internal closed form. `npm run validate:power` runs the simulator's own power
+model with the **physical** parameters of a DJI Matrice 100 (3.68 kg all-up, 4 ×
+0.34 m rotors) — keeping the sim's **default** electrical assumptions (efficiency
+0.74, avionics 24 W), *nothing fitted to the data* — and compares to measured
+battery power (voltage × current) from a public 209-flight dataset (figshare
+[10.1184/R1/12683453](https://doi.org/10.1184/R1/12683453), Nature *Scientific
+Data* 2021):
+
+```
+   condition    measured W    sim W    error
+       hover        472.7      421.3   -10.9%
+ cruise 4 m/s       456.7      404.4   -11.4%
+ cruise 8 m/s       454.0      400.1   -11.9%
+cruise 12 m/s       480.1      425.3   -11.4%
+                              mean abs  11.1%
+```
+
+The uncalibrated momentum-theory model reproduces both the **magnitude** (~400–480 W
+for a ~3.7 kg quad) and the **roughly-flat power-vs-speed shape**. It under-predicts
+by a **consistent ~11% offset** — the signature of a fixed avionics gap, not a shape
+error: the M100 carries ~1.1 kg of instrumentation (Raspberry Pi, ADC, wind sensor)
+drawing more than the sim's 24 W avionics default (raising it to ~75 W closes the
+gap). The reference is left untuned on purpose, and `src/sim/power.test.ts` asserts
+the model stays within 15 % of the measured values with the correct flat shape. This
+is the one check in the repo that is **not** internally calibrated.
+
 ## Layer 2 — Pricing: flight hours → $/hectare
 
 **Where:** [`src/economics/flightCostModel.ts`](src/economics/flightCostModel.ts) —

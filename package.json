@@ -11,7 +11,8 @@
     "test:run": "vitest run",
     "test:visual": "./scripts/run-playwright.sh test",
     "cost:sweep": "tsx scripts/costSweep.ts",
-    "verify:hopping": "tsx scripts/verifyHopping.ts"
+    "verify:hopping": "tsx scripts/verifyHopping.ts",
+    "validate:power": "tsx scripts/validatePowerM100.ts"
   },
   "dependencies": {
     "@react-three/drei": "9.88.13",

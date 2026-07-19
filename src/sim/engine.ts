@@ -213,7 +213,7 @@ function calculateCostPerHectareUsd(
 }
 
 /** True all-up flight mass: airframe + battery weight derived from pack specific energy. */
-function flightMassKg(params: SimulationParameters): number {
+export function flightMassKg(params: SimulationParameters): number {
   const batteryMassKg =
     params.batteryCapacityWh / Math.max(params.batterySpecificEnergyWhPerKg, 1);
   return params.airframeBaseMassKg + batteryMassKg;
@@ -223,7 +223,7 @@ function isFlightMode(mode: DroneMode): boolean {
   return mode !== "idle" && mode !== "charging" && mode !== "complete";
 }
 
-function calculateHoverPowerW(params: SimulationParameters): number {
+export function calculateHoverPowerW(params: SimulationParameters): number {
   const thrust = flightMassKg(params) * GRAVITY;
   const idealInduced =
     Math.pow(thrust, 1.5) /
@@ -232,7 +232,7 @@ function calculateHoverPowerW(params: SimulationParameters): number {
   return (idealInduced * profileFactor) / Math.max(params.propulsionEfficiency, 0.2);
 }
 
-function calculateCruiseDragPowerW(
+export function calculateCruiseDragPowerW(
   params: SimulationParameters,
   speedMps: number
 ): number {
@@ -242,6 +242,21 @@ function calculateCruiseDragPowerW(
     params.effectiveDragAreaM2 *
     Math.pow(Math.max(speedMps, 0), 3)
   ) / Math.max(params.propulsionEfficiency, 0.2);
+}
+
+/**
+ * Steady, level, non-accelerating flight power (W) at a given horizontal speed —
+ * the same composition samplePower() uses in flight modes: translational-relieved
+ * hover/support power + parasite drag + constant avionics draw. Used to validate
+ * the model against measured drone telemetry (see scripts/validatePowerM100.ts).
+ * At speedMps = 0 this is hover power + avionics.
+ */
+export function steadyLevelFlightPowerW(params: SimulationParameters, speedMps: number): number {
+  const hoverPowerW = calculateHoverPowerW(params);
+  const translationalRelief = 1 - 0.08 * Math.max(0, Math.min(Math.max(speedMps, 0) / 7, 1));
+  const supportPowerW = hoverPowerW * translationalRelief;
+  const dragPowerW = calculateCruiseDragPowerW(params, Math.max(speedMps, 0));
+  return supportPowerW + dragPowerW + params.avionicsPowerW;
 }
 
 function clampBatteryWh(params: SimulationParameters, batteryWh: number): number {

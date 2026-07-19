@@ -482,6 +482,11 @@ export default function App(): JSX.Element {
   };
 
   const restartMission = (): void => {
+    // Restart with whatever is currently configured, including pending draft edits —
+    // otherwise changing a control (e.g. Target layout) and hitting Restart silently
+    // re-runs the OLD parameters. Applying the draft here matches the expectation
+    // that a restart reflects the settings on screen.
+    setActiveParams(draftParams);
     setScenarioVersion((value) => value + 1);
   };
 

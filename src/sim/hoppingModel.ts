@@ -11,8 +11,10 @@
 //
 // A real airframe also has a cruise-speed cap v_max. Once √(a·d) exceeds v_max the
 // profile becomes a trapezoid (accelerate → cruise → decelerate), which takes
-// LONGER than the triangular ideal — so the pure formula is a lower bound and the
-// engine should sit at or above it. Both forms are provided.
+// LONGER than the triangular ideal — i.e. for a SINGLE hop the uncapped triangular
+// time is a lower bound on the capped time. Both forms are provided. (This is a
+// per-hop statement; whether the whole MISSION under-/over-shoots the closed form
+// depends on the action time t_act — see scripts/verifyHopping.ts and DERIVATION.md.)
 
 export interface HopKinematics {
   /** acceleration limit, m/s² (the engine's maxHorizontalAccelMps2) */

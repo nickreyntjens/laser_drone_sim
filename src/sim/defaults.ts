@@ -10,6 +10,7 @@ export const defaultParameters: SimulationParameters = {
   fieldWidthM: 250,
   fieldType: "potatoColoradoBeetle",
   targetingMode: "preSurveyed",
+  targetLayout: "poisson",
   showOnlySelectedTargetMarkers: true,
   edgeDensityPerHectare: 400,
   gradientStrength: 9,

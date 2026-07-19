@@ -18,6 +18,7 @@ export type DroneMode =
   | "complete";
 
 export type TargetingMode = "search" | "preSurveyed";
+export type TargetLayout = "poisson" | "uniformGrid";
 export type FieldType =
   | "potatoColoradoBeetle"
   | "riceYellowStemBorerEgg"
@@ -29,6 +30,9 @@ export interface SimulationParameters {
   fieldWidthM: number;
   fieldType: FieldType;
   targetingMode: TargetingMode;
+  /** How target positions are laid out: a realistic edge-clustered Poisson field, or
+   * a regular uniform grid (the pessimistic "hopping model" verification layout). */
+  targetLayout: TargetLayout;
   showOnlySelectedTargetMarkers: boolean;
   edgeDensityPerHectare: number;
   gradientStrength: number;

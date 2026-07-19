@@ -112,6 +112,7 @@ const SIMULATION_SECTION_KEYS: Record<Exclude<ScenarioSectionId, "aiming">, Arra
   ],
   mission: [
     "targetingMode",
+    "targetLayout",
     "showOnlySelectedTargetMarkers"
   ]
 };

@@ -197,6 +197,50 @@ export function buildSweepPath(params: SimulationParameters): Vec3[] {
   return path;
 }
 
+/** Lay ~`count` targets on a regular lattice spanning the field interior (the
+ * uniform-grid layout used for hopping-model verification). Serpentine id order so
+ * adjacent targets are one grid step apart. */
+function generateUniformGrid(
+  count: number,
+  params: SimulationParameters,
+  fieldProfile: FieldProfile
+): TargetState[] {
+  const margin = 2;
+  const usableL = Math.max(params.fieldLengthM - 2 * margin, 1);
+  const usableW = Math.max(params.fieldWidthM - 2 * margin, 1);
+  // choose cols×rows ≈ count while respecting the field's aspect ratio
+  const cols = Math.max(1, Math.round(Math.sqrt(count * (usableL / usableW))));
+  const rows = Math.max(1, Math.ceil(count / cols));
+  const dx = cols > 1 ? usableL / (cols - 1) : 0;
+  const dz = rows > 1 ? usableW / (rows - 1) : 0;
+  const y = fieldProfile.targetHeightBaseM;
+
+  const targets: TargetState[] = [];
+  let id = 0;
+  for (let r = 0; r < rows && id < count; r += 1) {
+    for (let cRaw = 0; cRaw < cols && id < count; cRaw += 1) {
+      const c = r % 2 === 0 ? cRaw : cols - 1 - cRaw; // serpentine
+      targets.push({
+        id,
+        position: vec3(margin + c * dx, y, margin + r * dz),
+        supportPosition: null,
+        rowIndex: r,
+        alive: true,
+        discovered: false,
+        queued: false,
+        detectionPulse: 0,
+        neutralizationPulse: 0,
+        engagementProgress: 0,
+        detectedAtS: null,
+        neutralizedAtS: null,
+        blockedUntilS: 0
+      });
+      id += 1;
+    }
+  }
+  return targets;
+}
+
 export function generateTargets(
   params: SimulationParameters,
   seed: number
@@ -212,6 +256,16 @@ export function generateTargets(
     : 1;
   const targetCountMean =
     params.edgeDensityPerHectare * fieldAreaHectares * borderPassThrough;
+
+  // Uniform-grid layout: the pessimistic "hopping model" verification case. Places
+  // ~targetCountMean beetles on a regular lattice spanning the field, so you can
+  // watch the drone serpentine across an even grid and compare it to the closed-form
+  // hopping model (see scripts/verifyHopping.ts, DERIVATION.md). Density-matched to
+  // the Poisson field so the pest-pressure control still means the same thing.
+  if (params.targetLayout === "uniformGrid") {
+    return generateUniformGrid(Math.max(1, Math.round(targetCountMean)), params, fieldProfile);
+  }
+
   const targetCount = samplePoisson(targetCountMean, rng);
   const rowCount = Math.max(1, Math.round(params.fieldWidthM / params.rowSpacingM));
   const accepted: TargetState[] = [];

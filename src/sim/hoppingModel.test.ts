@@ -66,8 +66,12 @@ function buildGrid(side: number, spacingM: number, params: SimulationParameters)
 }
 
 describe("hoppingModel vs full physics engine (uniform grid)", () => {
-  it("the engine clears the grid and sits at or above the closed form, within ~3×", () => {
-    const side = 6, spacingM = 5;
+  // The paper's hopping model uses an ACTION time t_act = 1.0 s/beetle (aim +
+  // neutralise + confirm), not the sim's engagementDwellS (0.2 s = firing only).
+  const PAPER_ACTION_S = 1.0;
+
+  it("the closed form (paper t_act) is an UPPER bound on the engine's hunting work", () => {
+    const side = 8, spacingM = 5;
     const params: SimulationParameters = {
       ...defaultParameters, targetingMode: "preSurveyed", farmersPerHectare: 0,
       neonicBorderEnabled: false, batteryCapacityWh: 100000, reserveBatteryPct: 0,
@@ -75,24 +79,35 @@ describe("hoppingModel vs full physics engine (uniform grid)", () => {
     };
     const targets = buildGrid(side, spacingM, params);
     const engine = new MissionEngine(params, DEFAULT_SEED, 1, { initialTargets: targets, initialBatteryWh: 100000 });
-    let steps = 0;
-    const MAX = (50 * 3600) / 0.05;
+
+    // accumulate time by phase so we can compare the paper's model (hunting only)
+    // against the engine's hunting work, excluding dock takeoff/return/land
+    const t: Record<string, number> = {};
+    let steps = 0; const MAX = (50 * 3600) / 0.05;
     while (!engine.summary && steps < MAX) {
       if (engine.drone.mode === "charging") engine.skipCharging();
-      engine.step(0.05); steps += 1;
+      const mode = engine.drone.mode;
+      engine.step(0.05);
+      if (mode !== "charging" && mode !== "complete") t[mode] = (t[mode] ?? 0) + 0.05;
+      steps += 1;
     }
     expect(engine.summary).not.toBeNull();
     expect(engine.summary!.beetlesNeutralized).toBe(side * side);
 
+    const huntingS = (t.approach ?? 0) + (t.searching ?? 0) + (t.aiming ?? 0) + (t.firing ?? 0) + (t.confirming ?? 0);
+    const engageS = (t.aiming ?? 0) + (t.firing ?? 0) + (t.confirming ?? 0);
     const closed = predictGridFlightTimeS({
-      count: targets.length, spacingM, dwellS: params.engagementDwellS,
+      count: targets.length, spacingM, dwellS: PAPER_ACTION_S,
       kinematics: { accelMps2: params.maxHorizontalAccelMps2, cruiseCapMps: params.cruiseSpeedMps },
     }).flightTimeS;
-    const engineS = engine.summary!.flightTimeS;
 
-    // The closed form is a lower bound; the engine adds cruise-cap, altitude and
-    // acquisition overhead. Agreement to a small constant factor validates the model.
-    expect(engineS).toBeGreaterThan(closed * 0.9);
-    expect(engineS).toBeLessThan(closed * 3);
+    // (1) closed form over-estimates the actual hunting work → upper bound
+    expect(closed).toBeGreaterThan(huntingS);
+    // (2) but only modestly (well within 30%) — the model is well-calibrated
+    expect(closed).toBeLessThan(huntingS * 1.3);
+    // (3) the sim's measured aim+fire+confirm per beetle is ≈ the paper's 1.0 s t_act
+    const engagePerTarget = engageS / targets.length;
+    expect(engagePerTarget).toBeGreaterThan(0.7);
+    expect(engagePerTarget).toBeLessThan(1.3);
   });
 });

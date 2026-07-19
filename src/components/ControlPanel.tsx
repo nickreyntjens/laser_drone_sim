@@ -249,6 +249,25 @@ export function ControlPanel({
             ]}
           />
           <ChoiceField
+            label="Target layout"
+            paramKey="targetLayout"
+            value={draftParams.targetLayout}
+            onParamChange={onParamChange}
+            helpText="Realistic infestations cluster at the field edge (Poisson). The uniform grid is the pessimistic verification layout: watch the drone serpentine an even lattice and compare it to the closed-form hopping model."
+            options={[
+              {
+                label: "Edge-clustered",
+                value: "poisson",
+                description: "Beetles invade from one edge and thin out with depth — a realistic Poisson infestation."
+              },
+              {
+                label: "Uniform grid",
+                value: "uniformGrid",
+                description: "Beetles on a regular lattice — the pessimistic hopping-model verification case; maximises travel per target."
+              }
+            ]}
+          />
+          <ChoiceField
             label="Target markers"
             paramKey="showOnlySelectedTargetMarkers"
             value={draftParams.showOnlySelectedTargetMarkers}

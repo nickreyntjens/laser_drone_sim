@@ -181,3 +181,41 @@ describe("generateTargets", () => {
     expect(supportLines.length).toBeGreaterThan(0);
   });
 });
+
+describe("generateTargets — uniform grid layout", () => {
+  const gridParams = createParams({ targetLayout: "uniformGrid", edgeDensityPerHectare: 400 });
+  const meanCount = 400 * (gridParams.fieldLengthM * gridParams.fieldWidthM) / 10_000;
+
+  it("produces roughly the density-matched count, all alive and in bounds", () => {
+    const t = generateTargets(gridParams, 17);
+    expect(t.length).toBeGreaterThan(meanCount * 0.85);
+    expect(t.length).toBeLessThanOrEqual(meanCount * 1.15);
+    for (const target of t) {
+      expect(target.alive).toBe(true);
+      expect(target.position.x).toBeGreaterThanOrEqual(0);
+      expect(target.position.x).toBeLessThanOrEqual(gridParams.fieldLengthM);
+      expect(target.position.z).toBeGreaterThanOrEqual(0);
+      expect(target.position.z).toBeLessThanOrEqual(gridParams.fieldWidthM);
+    }
+  });
+
+  it("lays targets on a regular, evenly-spaced lattice", () => {
+    const t = generateTargets(gridParams, 17);
+    const xs = [...new Set(t.map((p) => Math.round(p.position.x * 100) / 100))].sort((a, b) => a - b);
+    expect(xs.length).toBeLessThan(t.length); // few distinct columns ⇒ a lattice
+    const gaps = xs.slice(1).map((x, i) => x - xs[i]);
+    for (const g of gaps) expect(Math.abs(g - gaps[0])).toBeLessThan(0.05);
+  });
+
+  it("is deterministic — grid ignores the rng seed", () => {
+    const a = generateTargets(gridParams, 17).map((p) => p.position.x);
+    const b = generateTargets(gridParams, 999).map((p) => p.position.x);
+    expect(b).toEqual(a);
+  });
+
+  it("differs from the (default) Poisson layout", () => {
+    const poisson = generateTargets(createParams({ targetLayout: "poisson", edgeDensityPerHectare: 400 }), 17);
+    const distinctX = new Set(poisson.map((p) => Math.round(p.position.x * 100) / 100)).size;
+    expect(distinctX).toBeGreaterThan(poisson.length * 0.5); // Poisson x's mostly distinct
+  });
+});

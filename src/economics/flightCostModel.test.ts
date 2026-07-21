@@ -64,6 +64,16 @@ describe("calculateDroneFlightHourCost", () => {
     expect(r.sharedEquipmentCostPerHour).toBeCloseTo(0.1, 9);
   });
 
+  it("outliving the write-off spreads the airframe over the real life (lower €/h)", () => {
+    const base = calc().droneCapitalCostPerHour;                            // 1800 / (5×300) = 1.20
+    const durable = calc({ droneOutliveWriteOffYears: 5 }).droneCapitalCostPerHour; // 1800 / (10×300) = 0.60
+    expect(base).toBeCloseTo(1800 / (5 * 300), 9);
+    expect(durable).toBeCloseTo(1800 / (10 * 300), 9);
+    expect(durable).toBeLessThan(base);
+    // outlive=0 must reproduce the plain write-off (no silent behaviour change)
+    expect(calc({ droneOutliveWriteOffYears: 0 }).droneCapitalCostPerHour).toBeCloseTo(base, 12);
+  });
+
   it("totals equal the sum of their components", () => {
     const r = calc({ chargerPurchasePriceEur: 300 });
     expect(r.marginalFlightCostPerHour).toBeCloseTo(

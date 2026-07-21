@@ -56,6 +56,11 @@ export interface DroneFlightCostInputs {
   droneWriteOffYears: number;
   droneOperatingHoursPerYear: number;
   droneResidualValueEur: number;
+  /** Years the airframe physically OUTLIVES its accounting write-off. A flight hour
+   * doesn't consume the airframe — so if it lasts beyond the write-off period, the
+   * one-time cost spreads over the longer real life and the per-hour capital drops
+   * (toward the marginal rate once fully paid off). 0 = dies at write-off. */
+  droneOutliveWriteOffYears: number;
   // shared equipment (controller + charger, split across a fleet)
   chargerPurchasePriceEur: number;
   chargerWriteOffYears: number;
@@ -134,7 +139,11 @@ export function calculateDroneFlightHourCost(i: DroneFlightCostInputs): DroneFli
 
   // ---- drone capital: (price − residual) / (years × h/yr) — allocation, not wear ----
   const droneDepreciableValueEur = droneResOk ? Math.max(i.dronePurchasePriceEur - i.droneResidualValueEur, 0) : 0;
-  const droneLifetimeHours = droneUtilOk ? i.droneWriteOffYears * i.droneOperatingHoursPerYear : 0;
+  // Amortize the one-time airframe over its REAL physical life = write-off period plus
+  // any years it outlives that write-off. A durable drone spreads its cost over more
+  // hours ⇒ lower €/flight-hour ⇒ lower €/ha.
+  const droneRealLifeYears = i.droneWriteOffYears + Math.max(i.droneOutliveWriteOffYears, 0);
+  const droneLifetimeHours = droneUtilOk ? droneRealLifeYears * i.droneOperatingHoursPerYear : 0;
   const droneCapitalCostPerHour = droneUtilOk && droneResOk && droneLifetimeHours > 0
     ? droneDepreciableValueEur / droneLifetimeHours : 0;
 
@@ -188,6 +197,7 @@ export const FLIGHT_COST_DEFAULTS: DroneFlightCostInputs = {
   droneWriteOffYears: 5,       // 5 yr × 300 h/yr = the sim's 1,500 flight-h life
   droneOperatingHoursPerYear: 300,
   droneResidualValueEur: 0,
+  droneOutliveWriteOffYears: 0, // conservative: airframe dies at write-off (no bonus life)
   chargerPurchasePriceEur: 0,  // the published sim cost model has no charger capex;
   chargerWriteOffYears: 5,     // set a price > 0 to include one
   chargerSharedDrones: 5,

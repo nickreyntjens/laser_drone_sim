@@ -350,6 +350,28 @@ describe("runAimingSimulation", () => {
     expect(peakShotRate).toBeGreaterThan(0);
   });
 
+  // The thermal defaults are the BASIC model and nothing more: 1 mm³ of water,
+  // E = m·c·ΔT, adiabatic, flat 25% absorption. If anyone reintroduces a heat-loss
+  // term, a charring uplift or a fudge factor, this fails loudly.
+  it("thermal defaults are the plain 1 mm³ water model at flat 25% absorption", () => {
+    expect(defaultAimingLabParameters.targetMassMg).toBe(1);
+    expect(defaultAimingLabParameters.targetSpecificHeatJPerKgC).toBe(4186);
+    expect(defaultAimingLabParameters.targetHeatLossWPerC).toBe(0);
+    expect(defaultAimingLabParameters.targetLethalTemperatureC).toBe(52);
+    expect(defaultAimingLabParameters.targetAbsorptivityPct).toBe(25);
+  });
+
+  // With no heat-loss term there is no equilibrium plateau, so any power
+  // eventually reaches lethal — more power simply gets there sooner.
+  it("fires at every power from 5 W up, since the model is adiabatic", () => {
+    for (const laserPowerW of [5, 10, 25, 50]) {
+      const simulation = runAimingSimulation({ ...defaultAimingLabParameters, laserPowerW });
+      const peakShotRate = Math.max(...simulation.samples.map((sample) => sample.shotsPerSecond));
+
+      expect(peakShotRate, `${laserPowerW} W should fire`).toBeGreaterThan(0);
+    }
+  });
+
   it("fully removes platform disturbance at 100% suppression in an ideal tracking case", () => {
     const ideal = runAimingSimulation({
       ...defaultAimingLabParameters,

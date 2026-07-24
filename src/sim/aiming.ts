@@ -419,11 +419,18 @@ export const defaultAimingLabParameters: AimingLabParameters = {
   mirrorRollBiasMrad: 0,
   lockThresholdMrad: 0.08,
   targetDiameterMm: 0.28,
-  targetMassMg: 8,
-  targetSpecificHeatJPerKgC: 3600,
-  targetHeatLossWPerC: 0.04,
+  // Basic kill model, identical to the website's src/lib/killModel.ts: the aim point
+  // is 1 mm³ of water heated 22→52 °C, E = m·c·ΔT. No heat-loss term (a perfect
+  // insulator for the duration of the shot) and no conduction margin — every
+  // "to be more correct" refinement is left out so the number is hand-checkable.
+  targetMassMg: 1, // 1 mm³ of water ≈ 1 mg
+  targetSpecificHeatJPerKgC: 4186, // water
+  targetHeatLossWPerC: 0, // adiabatic — no conduction loss
   targetLethalTemperatureC: 52,
-  targetAbsorptivityPct: 80,
+  // Measured cold-cuticle absorption at ~1550 nm (the paper's spectra figure),
+  // applied flat to the whole shot. The spot does char toward black, which would
+  // raise coupling well above this — that upside is deliberately never credited.
+  targetAbsorptivityPct: 25,
   laserEngageCoveragePct: 62
 };
 

@@ -10,6 +10,12 @@ turning segments, the uncalibrated model predicts qualifying cruise flights with
 energy estimates, modestly under-predicting hover and low-speed cruise. Nothing was
 fitted to the telemetry.
 
+The model was additionally cross-checked against an independent third-party
+calculator, eCalc (§5). On the same M100 hover point, this simulator is **−11.0%**
+against the measurement while eCalc is **+20 to +28%** — so the simulator is the
+closer of the two to reality, and the constants were deliberately **not**
+recalibrated. §5.4 explains why.
+
 ## 1. Data source
 
 Rodrigues, Patrikar, Choudhry, *et al.*, **"In-flight positional and energy use
@@ -97,7 +103,103 @@ The model has the correct magnitude. The residual is not constant at
 higher speed, so this revision does not attribute it wholly to avionics or claim a
 validated flat power-versus-speed shape.
 
-## 5. Scope
+## 5. Third-party cross-check — eCalc
+
+The M100 telemetry above is one external check. A second, independent one is
+[eCalc xcopterCalc](https://www.ecalc.ch/xcoptercalc.php), the de-facto industry
+calculator for multirotor performance, built on a database of measured motors
+(14,876 at the time of this test) with empirical per-family propeller constants.
+It is a *model*, not a measurement — but it is independent of everything here.
+
+Tested 2026-07-29, eCalc version X7.41.009 (motor data 19.7.2026). Both runs were
+set to sea level, 15 °C, 1013 hPa so that eCalc's air density matches the
+simulator's ρ = 1.225 kg/m³. eCalc reports drive power only, so the simulator's
+same 24 W avionics allowance is added for a like-for-like total.
+
+To reproduce: enter model weight as *incl. Drive* (so eCalc uses the stated all-up
+mass rather than summing components), 4 rotors, `flat`, elevation 0 m, 15 °C.
+Design drone — 2200 g, 450 mm frame, LiPo 6000 mAh 30/45C 6S, ESC `max 30A`, motor
+T-Motor `MN3110-470`. M100 — 3680 g, 650 mm frame, LiPo 4500 mAh 65/100C 6S, ESC
+`max 30A`, motor DJI `3508-415` or T-Motor `MN4120-400`, propeller family `DJI`
+13.39 × 4.5, 2 blades. Figure of Merit is derived, not reported by eCalc:
+FM = ideal induced power ÷ eCalc's `P(out) @ Hover`, with ideal induced power
+= T^1.5 / √(2 ρ A) over the *total* disc area eCalc reports.
+
+### 5.1 The decisive run — eCalc against the M100 itself
+
+Before using eCalc to judge this simulator, it was pointed at the one aircraft
+whose true power is known: the M100 of §2 (3.68 kg, four 13.39 in DJI rotors, 6S).
+
+| source | M100 hover | error vs measured | implied FM × η |
+|---|---:|---:|---:|
+| **measured (§2)** | **473.4 W** | — | 0.512 |
+| this simulator | 421.3 W | **−11.0%** | 0.579 |
+| eCalc, DJI 3508-415 motor | 604.1 W | **+27.6%** | 0.396 |
+| eCalc, T-Motor MN4120-400 motor | 568.4 W | **+20.1%** | 0.422 |
+
+**eCalc is roughly twice as far from reality as this simulator, in the opposite
+direction.** The second motor was run to confirm the gap is not an artefact of
+component choice; it narrows the error but does not remove it.
+
+eCalc's rotor model is also internally inconsistent with the measurement. It
+returns Figure of Merit 0.505 for the DJI 13.39 in rotor — identical for both
+motors, confirming FM is a property of the propeller alone. But the *measured*
+combined FM × η is 0.512, which would require a drivetrain efficiency of 1.014 —
+above 100%, and therefore impossible. eCalc's rotor figure must be too low; at a
+realistic η ≈ 0.87 the real rotor is near FM 0.59, some 17% above eCalc's 0.505.
+
+### 5.2 The 2.2 kg design drone
+
+Same procedure for the simulator's default aircraft: 2.2 kg all-up, four rotors,
+11.33 in propellers giving a 0.2602 m² disc (the simulator's 0.26 m²), 6S,
+T-Motor MN3110-470. Ideal induced power is 125.6 W in every row.
+
+| propeller | P(in) hover | FM | drive η | FM × η | g/W |
+|---|---:|---:|---:|---:|---:|
+| T-Motor CF 11.33×3.7 | 297.6 W | 0.483 | 0.874 | 0.422 | 7.39 |
+| T-Motor CF 11.33×3.0 | 296.7 W | 0.483 | 0.876 | 0.423 | 7.41 |
+| APC MultiRotor MR 11.33×3.8 | 282.0 W | 0.510 | 0.874 | 0.445 | 7.80 |
+| Mejzlik Multicopter 11.33×3.7 | 266.2 W | 0.539 | 0.875 | 0.472 | 8.26 |
+| **this simulator** | **217.2 W** | **0.781** | **0.740** | **0.578** | **10.13** |
+
+Read alone, this suggests the simulator is 18–27% optimistic. Read together with
+§5.1 — where eCalc was 20–28% *pessimistic* against a real measurement of the same
+kind — it does not support that conclusion.
+
+### 5.3 What the exercise did establish
+
+The simulator's two electrical constants are each individually indefensible; they
+happen to cancel. Taking the measured combined 0.512 and a realistic drivetrain
+efficiency of ~0.87 (eCalc's own motor-level figure for a well-matched motor)
+implies a Figure of Merit near 0.59 — inside the 0.5–0.65 band usually quoted for
+multirotor rotors of this size, and nowhere near 0.78.
+
+| | this simulator | implied by measurement |
+|---|---:|---:|
+| Figure of Merit (= 1 / 1.28) | 0.781 | ~0.59 |
+| drivetrain efficiency η | 0.740 | ~0.87 |
+| **product (what actually sets power)** | **0.578** | **0.512** |
+
+FM is ~32% too generous, η ~15% too harsh, and the product — the only quantity
+that affects the output — lands 13% optimistic, consistent with the −11% hover
+error in §4.
+
+### 5.4 Decision: no recalibration
+
+The constants were left unchanged, deliberately.
+
+- **Recalibrating toward eCalc** would move the model from −11% to roughly
+  +20–28% against the only real measurement available. Measurably worse.
+- **Recalibrating toward the M100** would make the model accurate for the M100 at
+  the cost of the independence of §4. A model fitted to a dataset cannot then be
+  validated by it, and this document's central claim is that nothing was fitted.
+
+A known, bounded, single-direction 13% optimistic bias, documented here, is a
+stronger position than a fitted model with no surviving external check. The
+residual moves the fully-allocated flight-hour cost by roughly +3–8%, which does
+not change any conclusion that rests on it.
+
+## 6. Scope
 
 - ✅ Supports feasibility-scale hover and forward-flight energy estimates.
 - ⚠️ Does not independently validate mission route time, target distributions,
